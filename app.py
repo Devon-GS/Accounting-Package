@@ -453,29 +453,29 @@ def batch_summary(batch_id: int) -> dict:
     )
     unresolved = query_all(
         """
-        SELECT supplier_name, COUNT(*) AS item_count
+        SELECT
+            staged_payments.id AS staged_id,
+            staged_payments.batch_id,
+            staged_payments.payment_date,
+            staged_payments.supplier_name,
+            staged_payments.supplier_key,
+            staged_payments.amount_paid,
+            staged_payments.source_sheet,
+            staged_payments.source_row,
+            staged_payments.source_column,
+            import_files.original_filename,
+            import_files.file_date
         FROM staged_payments
-        WHERE batch_id = ? AND account_id IS NULL
-        GROUP BY supplier_key, supplier_name
-        ORDER BY supplier_name
+        JOIN import_files ON import_files.id = staged_payments.file_id
+        WHERE staged_payments.account_id IS NULL
+        ORDER BY import_files.file_date DESC, import_files.original_filename DESC,
+                 staged_payments.source_row ASC, staged_payments.source_column ASC
         """,
-        (batch_id,),
-    )
-    recent = query_all(
-        """
-        SELECT payments.payment_date, payments.supplier_name, payments.amount_paid,
-               accounts.name AS account_name, payments.source_file_name
-        FROM payments
-        JOIN accounts ON accounts.id = payments.account_id
-        ORDER BY payments.id DESC
-        LIMIT 20
-        """
     )
     return {
         "counts": counts,
         "files": files,
         "unresolved": unresolved,
-        "recent": recent,
     }
 
 
@@ -575,70 +575,57 @@ def upload_cash_payments():
     return redirect(url_for("cash_payments", batch_id=batch_id))
 
 
-@app.route("/cash-payments/resolve/<int:batch_id>", methods=["POST"])
-def resolve_cash_payments(batch_id: int):
-    unresolved = query_all(
+@app.route("/cash-payments/resolve/<int:staged_id>", methods=["POST"])
+def resolve_cash_payment_item(staged_id: int):
+    staged = query_one(
         """
-        SELECT DISTINCT supplier_key, supplier_name
+        SELECT staged_payments.*, import_files.original_filename, import_files.file_date
         FROM staged_payments
-        WHERE batch_id = ? AND account_id IS NULL
-        ORDER BY supplier_name
+        JOIN import_files ON import_files.id = staged_payments.file_id
+        WHERE staged_payments.id = ?
         """,
-        (batch_id,),
+        (staged_id,),
     )
-    if not unresolved:
-        flash("No unresolved suppliers were waiting for a mapping.", "info")
-        return redirect(url_for("cash_payments", batch_id=batch_id))
+    if not staged:
+        flash("That transaction could not be found.", "warning")
+        return redirect(url_for("cash_payments"))
 
-    created = 0
-    linked = 0
-    for supplier in unresolved:
-        supplier_key = supplier["supplier_key"]
-        supplier_name = supplier["supplier_name"]
-        form_key = supplier_key.replace(" ", "_")
-        selected_account_id = request.form.get(f"account_id_{form_key}", type=int)
-        new_account_name = request.form.get(f"new_account_{form_key}", "").strip()
+    if staged["account_id"] is not None:
+        flash("That transaction is already resolved.", "info")
+        return redirect(url_for("cash_payments"))
 
-        if selected_account_id:
-            account = query_one("SELECT id FROM accounts WHERE id = ?", (selected_account_id,))
-            if account:
-                ensure_rule(supplier_name, selected_account_id)
-                execute(
-                    """
-                    UPDATE staged_payments
-                    SET account_id = ?
-                    WHERE batch_id = ? AND supplier_key = ? AND account_id IS NULL
-                    """,
-                    (selected_account_id, batch_id, supplier_key),
-                )
-                linked += 1
-            continue
+    selected_account_id = request.form.get("account_id", type=int)
+    new_account_name = request.form.get("new_account_name", "").strip()
+    account_id = None
+    account_name = None
 
-        if new_account_name:
-            existing = find_account_by_normalized_name(new_account_name)
-            if existing:
-                account_id = existing["id"]
-            else:
-                cursor = execute("INSERT INTO accounts (name) VALUES (?)", (new_account_name,))
-                account_id = cursor.lastrowid
-                created += 1
-            ensure_rule(supplier_name, account_id)
-            execute(
-                """
-                UPDATE staged_payments
-                SET account_id = ?
-                WHERE batch_id = ? AND supplier_key = ? AND account_id IS NULL
-                """,
-                (account_id, batch_id, supplier_key),
-            )
-            linked += 1
+    if selected_account_id:
+        account = query_one("SELECT id FROM accounts WHERE id = ?", (selected_account_id,))
+        if account:
+            account_id = selected_account_id
+            account_name = query_one("SELECT name FROM accounts WHERE id = ?", (selected_account_id,))["name"]
+    elif new_account_name:
+        existing = find_account_by_normalized_name(new_account_name)
+        if existing:
+            account_id = existing["id"]
+            account_name = existing["name"]
+        else:
+            cursor = execute("INSERT INTO accounts (name) VALUES (?)", (new_account_name,))
+            account_id = cursor.lastrowid
+            account_name = new_account_name
 
-    inserted = finalize_resolved_rows(batch_id)
-    flash(
-        f"Saved {linked} supplier mapping(s), created {created} new account(s), and finalized {inserted} payment row(s).",
-        "success",
+    if not account_id:
+        flash("Choose an existing account or type a new account name before saving.", "warning")
+        return redirect(url_for("cash_payments"))
+
+    ensure_rule(staged["supplier_name"], account_id)
+    execute(
+        "UPDATE staged_payments SET account_id = ? WHERE id = ?",
+        (account_id, staged_id),
     )
-    return redirect(url_for("cash_payments", batch_id=batch_id))
+    finalize_resolved_rows(staged["batch_id"])
+    flash(f"Saved '{staged['supplier_name']}' to '{account_name}'.", "success")
+    return redirect(url_for("cash_payments"))
 
 
 @app.route("/accounts", methods=["GET", "POST"])

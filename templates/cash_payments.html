@@ -22,9 +22,11 @@
         </form>
       </div>
     </div>
+  </div>
 
+  <div class="col-lg-7">
     {% if summary and summary.files %}
-    <div class="card shadow-sm border-0 panel-card mt-4">
+    <div class="card shadow-sm border-0 panel-card">
       <div class="card-body p-4">
         <h2 class="h5 fw-bold mb-3">Latest Batch</h2>
         <div class="small text-body-secondary mb-2">Batch ID: {{ batch_id }}</div>
@@ -40,15 +42,17 @@
     </div>
     {% endif %}
   </div>
+</div>
 
-  <div class="col-lg-7">
+<div class="row g-4 mt-1">
+  <div class="col-12">
     <div class="card shadow-sm border-0 panel-card">
       <div class="card-body p-4">
         <div class="d-flex justify-content-between align-items-center mb-3">
-          <h2 class="h5 fw-bold mb-0">Recent Payments</h2>
-          <span class="badge text-bg-dark">{{ summary.recent|length if summary else 0 }} shown</span>
+          <h2 class="h5 fw-bold mb-0">Unresolved Transactions</h2>
+          <span class="badge text-bg-dark">{{ summary.counts.unresolved_total if summary and summary.counts else 0 }} open</span>
         </div>
-        {% if summary and summary.recent %}
+        {% if summary and summary.unresolved %}
           <div class="table-responsive">
             <table class="table table-sm align-middle">
               <thead>
@@ -56,16 +60,33 @@
                   <th>Date</th>
                   <th>Supplier</th>
                   <th class="text-end">Amount</th>
+                  <th>File</th>
                   <th>Account</th>
+                  <th>New Account</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
-                {% for row in summary.recent %}
+                {% for row in summary.unresolved %}
                   <tr>
                     <td>{{ row.payment_date }}</td>
-                    <td>{{ row.supplier_name }}</td>
+                    <td class="fw-semibold">{{ row.supplier_name }}</td>
                     <td class="text-end">{{ "%.2f"|format(row.amount_paid) }}</td>
-                    <td>{{ row.account_name }}</td>
+                    <td>{{ row.original_filename }}</td>
+                    <td style="min-width: 240px;">
+                      <select class="form-select form-select-sm" name="account_id" form="resolve-{{ row.staged_id }}">
+                        <option value="">Choose account</option>
+                        {% for account in accounts %}
+                          <option value="{{ account.id }}">{{ account.name }}</option>
+                        {% endfor %}
+                      </select>
+                    </td>
+                    <td style="min-width: 240px;">
+                      <input class="form-control form-control-sm" type="text" name="new_account_name" form="resolve-{{ row.staged_id }}" placeholder="New account name">
+                    </td>
+                    <td>
+                      <button class="btn btn-sm btn-primary" type="submit" form="resolve-{{ row.staged_id }}">Save</button>
+                    </td>
                   </tr>
                 {% endfor %}
               </tbody>
@@ -73,7 +94,7 @@
           </div>
         {% else %}
           <div class="empty-state">
-            No payments have been finalized yet.
+            No unresolved transactions are waiting for account mapping.
           </div>
         {% endif %}
       </div>
@@ -82,67 +103,9 @@
 </div>
 
 {% if summary and summary.unresolved %}
-<div class="modal fade" id="resolveModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-xl modal-dialog-scrollable">
-    <div class="modal-content">
-      <div class="modal-header">
-        <div>
-          <h2 class="modal-title h5 mb-1">Resolve supplier mappings</h2>
-          <div class="text-body-secondary">Link unknown suppliers to existing accounts or create new ones.</div>
-        </div>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
-      <form method="post" action="{{ url_for('resolve_cash_payments', batch_id=batch_id) }}">
-        <div class="modal-body">
-          <div class="table-responsive">
-            <table class="table align-middle">
-              <thead>
-                <tr>
-                  <th>Supplier</th>
-                  <th>Rows</th>
-                  <th>Link to existing account</th>
-                  <th>Or create new account</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for item in summary.unresolved %}
-                  <tr>
-                    <td class="fw-semibold">{{ item.supplier_name }}</td>
-                    <td>{{ item.item_count }}</td>
-                    <td style="min-width: 260px;">
-                      <select class="form-select" name="account_id_{{ item.supplier_key|replace(' ', '_') }}">
-                        <option value="">Choose account</option>
-                        {% for account in accounts %}
-                          <option value="{{ account.id }}">{{ account.name }}</option>
-                        {% endfor %}
-                      </select>
-                    </td>
-                    <td style="min-width: 260px;">
-                      <input class="form-control" type="text" name="new_account_{{ item.supplier_key|replace(' ', '_') }}" placeholder="New account name">
-                    </td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Not now</button>
-          <button type="submit" class="btn btn-primary">Save mappings</button>
-        </div>
-      </form>
-    </div>
-  </div>
-</div>
+  {% for row in summary.unresolved %}
+    <form id="resolve-{{ row.staged_id }}" method="post" action="{{ url_for('resolve_cash_payment_item', staged_id=row.staged_id) }}"></form>
+  {% endfor %}
 {% endif %}
 
-{% endblock %}
-
-{% block scripts %}
-{% if summary and summary.unresolved %}
-<script>
-  const resolveModal = new bootstrap.Modal(document.getElementById('resolveModal'));
-  resolveModal.show();
-</script>
-{% endif %}
 {% endblock %}
