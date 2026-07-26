@@ -430,6 +430,44 @@ def latest_batch_id() -> int | None:
     return row["id"] if row else None
 
 
+def normalize_month(value: str | None) -> str:
+    if not value:
+        return ""
+    try:
+        return datetime.strptime(value, "%Y-%m").strftime("%Y-%m")
+    except ValueError:
+        return ""
+
+
+def latest_payment_month() -> str | None:
+    row = query_one(
+        """
+        SELECT strftime('%Y-%m', payment_date) AS month_value
+        FROM payments
+        WHERE payment_date IS NOT NULL
+        ORDER BY payment_date DESC
+        LIMIT 1
+        """
+    )
+    return row["month_value"] if row and row["month_value"] else None
+
+
+def available_payment_months() -> list[sqlite3.Row]:
+    return query_all(
+        """
+        SELECT strftime('%Y-%m', payment_date) AS month_value
+        FROM payments
+        WHERE payment_date IS NOT NULL
+        GROUP BY month_value
+        ORDER BY month_value DESC
+        """
+    )
+
+
+def month_label(month_value: str) -> str:
+    return datetime.strptime(month_value, "%Y-%m").strftime("%B %Y")
+
+
 def batch_summary(batch_id: int) -> dict:
     counts = query_one(
         """
@@ -477,6 +515,48 @@ def batch_summary(batch_id: int) -> dict:
         "files": files,
         "unresolved": unresolved,
     }
+
+
+def account_summary_for_month(month_value: str) -> list[sqlite3.Row]:
+    return query_all(
+        """
+        SELECT
+            payments.supplier_name,
+            COALESCE(accounts.source_sheet, 'Manual') AS source,
+            SUM(payments.amount_paid) AS amount_paid,
+            COUNT(*) AS transaction_count,
+            MIN(payments.account_id) AS account_id
+        FROM payments
+        JOIN accounts ON accounts.id = payments.account_id
+        WHERE strftime('%Y-%m', payments.payment_date) = ?
+        GROUP BY payments.supplier_name, COALESCE(accounts.source_sheet, 'Manual')
+        ORDER BY payments.supplier_name
+        """,
+        (month_value,),
+    )
+
+
+def supplier_transactions_for_month(month_value: str, supplier_name: str) -> list[sqlite3.Row]:
+    return query_all(
+        """
+        SELECT
+            payments.payment_date,
+            payments.supplier_name,
+            payments.amount_paid,
+            accounts.name AS account_name,
+            COALESCE(accounts.source_sheet, 'Manual') AS source,
+            payments.source_file_name,
+            payments.source_sheet,
+            payments.source_row,
+            payments.source_column
+        FROM payments
+        JOIN accounts ON accounts.id = payments.account_id
+        WHERE strftime('%Y-%m', payments.payment_date) = ?
+          AND payments.supplier_name = ?
+        ORDER BY payments.payment_date, payments.id
+        """,
+        (month_value, supplier_name),
+    )
 
 
 @app.before_request
@@ -630,6 +710,41 @@ def resolve_cash_payment_item(staged_id: int):
 
 @app.route("/accounts", methods=["GET", "POST"])
 def accounts():
+    month_value = normalize_month(request.args.get("month")) or latest_payment_month()
+    month_options = available_payment_months()
+    if not month_value and month_options:
+        month_value = month_options[0]["month_value"]
+    rows = account_summary_for_month(month_value) if month_value else []
+    return render_template(
+        "accounts.html",
+        month_value=month_value,
+        month_label=month_label(month_value) if month_value else None,
+        month_options=month_options,
+        rows=rows,
+    )
+
+
+@app.route("/accounts/<path:supplier_name>", methods=["GET"])
+def supplier_transactions(supplier_name: str):
+    month_value = normalize_month(request.args.get("month")) or latest_payment_month()
+    month_options = available_payment_months()
+    if not month_value and month_options:
+        month_value = month_options[0]["month_value"]
+    transactions = supplier_transactions_for_month(month_value, supplier_name) if month_value else []
+    total_amount = sum(row["amount_paid"] for row in transactions)
+    return render_template(
+        "supplier_transactions.html",
+        supplier_name=supplier_name,
+        month_value=month_value,
+        month_label=month_label(month_value) if month_value else None,
+        month_options=month_options,
+        transactions=transactions,
+        total_amount=total_amount,
+    )
+
+
+@app.route("/settings", methods=["GET", "POST"])
+def settings():
     if request.method == "POST":
         account_name = request.form.get("account_name", "").strip()
         if account_name:
@@ -639,7 +754,7 @@ def accounts():
             else:
                 execute("INSERT INTO accounts (name) VALUES (?)", (account_name,))
                 flash(f"Created account '{account_name}'.", "success")
-        return redirect(url_for("accounts"))
+        return redirect(url_for("settings"))
 
     account_rows = query_all(
         """
@@ -659,7 +774,7 @@ def accounts():
         ORDER BY supplier_rules.supplier_name
         """
     )
-    return render_template("accounts.html", accounts=account_rows, rules=rules)
+    return render_template("settings.html", accounts=account_rows, rules=rules)
 
 
 if __name__ == "__main__":
