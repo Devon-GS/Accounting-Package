@@ -520,45 +520,42 @@ def batch_summary(batch_id: int) -> dict:
 
 
 def account_summary_for_month(month_value: str) -> list[sqlite3.Row]:
-	return query_all(
-		"""
-		SELECT
-			payments.supplier_name,
-			COALESCE(accounts.source_sheet, 'Manual') AS source,
-			SUM(payments.amount_paid) AS amount_paid,
-			COUNT(*) AS transaction_count,
-			MIN(payments.account_id) AS account_id
-		FROM payments
-		JOIN accounts ON accounts.id = payments.account_id
-		WHERE strftime('%Y-%m', payments.payment_date) = ?
-		GROUP BY payments.supplier_name, COALESCE(accounts.source_sheet, 'Manual')
-		ORDER BY payments.supplier_name
-		""",
-		(month_value,),
-	)
+    return query_all(
+        """
+        SELECT
+            accounts.id AS account_id,
+            accounts.name AS account_name,
+            SUM(payments.amount_paid) AS amount_paid
+        FROM payments
+        JOIN accounts ON accounts.id = payments.account_id
+        WHERE strftime('%Y-%m', payments.payment_date) = ?
+        GROUP BY accounts.id, accounts.name
+        ORDER BY accounts.name
+        """,
+        (month_value,),
+    )
 
 
-def supplier_transactions_for_month(month_value: str, supplier_name: str) -> list[sqlite3.Row]:
-	return query_all(
-		"""
-		SELECT
-			payments.payment_date,
-			payments.supplier_name,
-			payments.amount_paid,
-			accounts.name AS account_name,
-			COALESCE(accounts.source_sheet, 'Manual') AS source,
-			payments.source_file_name,
-			payments.source_sheet,
-			payments.source_row,
-			payments.source_column
-		FROM payments
-		JOIN accounts ON accounts.id = payments.account_id
-		WHERE strftime('%Y-%m', payments.payment_date) = ?
-		  AND payments.supplier_name = ?
-		ORDER BY payments.payment_date, payments.id
-		""",
-		(month_value, supplier_name),
-	)
+def account_transactions_for_month(month_value: str, account_id: int) -> list[sqlite3.Row]:
+    return query_all(
+        """
+        SELECT
+            payments.payment_date,
+            payments.supplier_name,
+            payments.amount_paid,
+            accounts.name AS account_name,
+            payments.source_file_name,
+            payments.source_sheet,
+            payments.source_row,
+            payments.source_column
+        FROM payments
+        JOIN accounts ON accounts.id = payments.account_id
+        WHERE strftime('%Y-%m', payments.payment_date) = ?
+          AND payments.account_id = ?
+        ORDER BY payments.payment_date, payments.id
+        """,
+        (month_value, account_id),
+    )
 
 
 @app.before_request
@@ -717,76 +714,82 @@ def resolve_cash_payment_item(staged_id: int):
 
 @app.route("/accounts", methods=["GET", "POST"])
 def accounts():
-	month_value = normalize_month(request.args.get("month")) or latest_payment_month()
-	month_options = available_payment_months()
-	if not month_value and month_options:
-		month_value = month_options[0]["month_value"]
-	rows = account_summary_for_month(month_value) if month_value else []
-	return render_template(
-		"accounts.html",
-		month_value=month_value,
-		month_label=month_label(month_value) if month_value else None,
-		month_options=month_options,
-		rows=rows,
-	)
+    month_value = normalize_month(request.args.get("month")) or latest_payment_month()
+    month_options = available_payment_months()
+    if not month_value and month_options:
+        month_value = month_options[0]["month_value"]
+    rows = account_summary_for_month(month_value) if month_value else []
+    return render_template(
+        "accounts.html",
+        month_value=month_value,
+        month_label=month_label(month_value) if month_value else None,
+        month_options=month_options,
+        rows=rows,
+    )
 
 
-@app.route("/accounts/<path:supplier_name>", methods=["GET"])
-def supplier_transactions(supplier_name: str):
-	month_value = normalize_month(request.args.get("month")) or latest_payment_month()
-	month_options = available_payment_months()
-	if not month_value and month_options:
-		month_value = month_options[0]["month_value"]
-	transactions = supplier_transactions_for_month(month_value, supplier_name) if month_value else []
-	total_amount = sum(row["amount_paid"] for row in transactions)
-	return render_template(
-		"supplier_transactions.html",
-		supplier_name=supplier_name,
-		month_value=month_value,
-		month_label=month_label(month_value) if month_value else None,
-		month_options=month_options,
-		transactions=transactions,
-		total_amount=total_amount,
-	)
+@app.route("/accounts/<int:account_id>", methods=["GET"])
+def account_transactions(account_id: int):
+    account = query_one("SELECT id, name FROM accounts WHERE id = ?", (account_id,))
+    if not account:
+        flash("That account could not be found.", "warning")
+        return redirect(url_for("accounts"))
+
+    month_value = normalize_month(request.args.get("month")) or latest_payment_month()
+    month_options = available_payment_months()
+    if not month_value and month_options:
+        month_value = month_options[0]["month_value"]
+    transactions = account_transactions_for_month(month_value, account_id) if month_value else []
+    total_amount = sum(row["amount_paid"] for row in transactions)
+    return render_template(
+        "account_transactions.html",
+        account_name=account["name"],
+        account_id=account_id,
+        month_value=month_value,
+        month_label=month_label(month_value) if month_value else None,
+        month_options=month_options,
+        transactions=transactions,
+        total_amount=total_amount,
+    )
 
 
 @app.route("/settings", methods=["GET", "POST"])
 def settings():
-	if request.method == "POST":
-		account_name = request.form.get("account_name", "").strip()
-		if account_name:
-			existing = find_account_by_normalized_name(account_name)
-			if existing:
-				flash(f"Account '{account_name}' already exists.", "info")
-			else:
-				upper_name = canonical_account_name(account_name)
-				execute("INSERT INTO accounts (name) VALUES (?)", (upper_name,))
-				flash(f"Created account '{upper_name}'.", "success")
-		return redirect(url_for("settings"))
+    if request.method == "POST":
+        account_name = request.form.get("account_name", "").strip()
+        if account_name:
+            existing = find_account_by_normalized_name(account_name)
+            if existing:
+                flash(f"Account '{account_name}' already exists.", "info")
+            else:
+                upper_name = canonical_account_name(account_name)
+                execute("INSERT INTO accounts (name) VALUES (?)", (upper_name,))
+                flash(f"Created account '{upper_name}'.", "success")
+        return redirect(url_for("settings"))
 
-	account_rows = query_all(
-		"""
-		SELECT accounts.id, accounts.name, accounts.source_sheet,
-			   COUNT(DISTINCT supplier_rules.id) AS linked_suppliers
-		FROM accounts
-		LEFT JOIN supplier_rules ON supplier_rules.account_id = accounts.id
-		GROUP BY accounts.id
-		ORDER BY accounts.name
-		"""
-	)
-	rules = query_all(
-		"""
-		SELECT supplier_rules.supplier_name, accounts.name AS account_name
-		FROM supplier_rules
-		JOIN accounts ON accounts.id = supplier_rules.account_id
-		ORDER BY supplier_rules.supplier_name
-		"""
-	)
-	return render_template("settings.html", accounts=account_rows, rules=rules)
+    account_rows = query_all(
+        """
+        SELECT accounts.id, accounts.name, accounts.source_sheet,
+               COUNT(DISTINCT supplier_rules.id) AS linked_suppliers
+        FROM accounts
+        LEFT JOIN supplier_rules ON supplier_rules.account_id = accounts.id
+        GROUP BY accounts.id
+        ORDER BY accounts.name
+        """
+    )
+    rules = query_all(
+        """
+        SELECT supplier_rules.supplier_name, accounts.name AS account_name
+        FROM supplier_rules
+        JOIN accounts ON accounts.id = supplier_rules.account_id
+        ORDER BY supplier_rules.supplier_name
+        """
+    )
+    return render_template("settings.html", accounts=account_rows, rules=rules)
 
 
 if __name__ == "__main__":
-	with app.app_context():
-		initialize_storage()
-		sync_account_names()
-	app.run(debug=True)
+    with app.app_context():
+        initialize_storage()
+        sync_account_names()
+    app.run(debug=True)

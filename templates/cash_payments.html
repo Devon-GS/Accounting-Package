@@ -26,18 +26,20 @@
 
   <div class="col-lg-7">
     {% if summary and summary.files %}
-    <div class="card shadow-sm border-0 panel-card">
+    <div class="card shadow-sm border-0 panel-card latest-batch-card">
       <div class="card-body p-4">
         <h2 class="h5 fw-bold mb-3">Latest Batch</h2>
         <div class="small text-body-secondary mb-2">Batch ID: {{ batch_id }}</div>
-        <ul class="list-unstyled mb-0">
-          {% for file in summary.files %}
-            <li class="mb-2">
-              <span class="fw-semibold">{{ file.original_filename }}</span><br>
-              <span class="text-body-secondary">Date: {{ file.file_date }}</span>
-            </li>
-          {% endfor %}
-        </ul>
+        <div class="latest-batch-scroll">
+          <ul class="list-unstyled mb-0">
+            {% for file in summary.files %}
+              <li class="latest-batch-item">
+                <span class="fw-semibold">{{ file.original_filename }}</span>
+                <span class="text-body-secondary d-block small">Date: {{ file.file_date }}</span>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
       </div>
     </div>
     {% endif %}
