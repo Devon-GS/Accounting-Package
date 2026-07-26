@@ -254,13 +254,17 @@ def sync_account_names() -> dict[str, int]:
 
 
 def find_account_by_normalized_name(name: str) -> sqlite3.Row | None:
-	target = normalize_text(name)
-	if not target:
-		return None
-	for account in query_all("SELECT id, name FROM accounts"):
-		if normalize_text(account["name"]) == target:
-			return account
-	return None
+    target = normalize_text(name)
+    if not target:
+        return None
+    for account in query_all("SELECT id, name FROM accounts"):
+        if normalize_text(account["name"]) == target:
+            return account
+    return None
+
+
+def canonical_account_name(name: str) -> str:
+    return str(name or "").strip().upper()
 
 
 def ensure_rule(supplier_name: str, account_id: int) -> None:
@@ -687,9 +691,10 @@ def resolve_cash_payment_item(staged_id: int):
 			account_id = existing["id"]
 			account_name = existing["name"]
 		else:
-			cursor = execute("INSERT INTO accounts (name) VALUES (?)", (new_account_name,))
+			upper_name = canonical_account_name(new_account_name)
+			cursor = execute("INSERT INTO accounts (name) VALUES (?)", (upper_name,))
 			account_id = cursor.lastrowid
-			account_name = new_account_name
+			account_name = upper_name
 
 	if not account_id:
 		flash("Choose an existing account or type a new account name before saving.", "warning")
@@ -697,8 +702,12 @@ def resolve_cash_payment_item(staged_id: int):
 
 	ensure_rule(staged["supplier_name"], account_id)
 	execute(
-		"UPDATE staged_payments SET account_id = ? WHERE id = ?",
-		(account_id, staged_id),
+		"""
+		UPDATE staged_payments
+		SET account_id = ?
+		WHERE batch_id = ? AND supplier_key = ? AND account_id IS NULL
+		""",
+		(account_id, staged["batch_id"], staged["supplier_key"]),
 	)
 	finalize_resolved_rows(staged["batch_id"])
 	flash(f"Saved '{staged['supplier_name']}' to '{account_name}'.", "success")
@@ -749,8 +758,9 @@ def settings():
 			if existing:
 				flash(f"Account '{account_name}' already exists.", "info")
 			else:
-				execute("INSERT INTO accounts (name) VALUES (?)", (account_name,))
-				flash(f"Created account '{account_name}'.", "success")
+				upper_name = canonical_account_name(account_name)
+				execute("INSERT INTO accounts (name) VALUES (?)", (upper_name,))
+				flash(f"Created account '{upper_name}'.", "success")
 		return redirect(url_for("settings"))
 
 	account_rows = query_all(
