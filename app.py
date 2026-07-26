@@ -224,33 +224,34 @@ def initialize_storage() -> None:
 
 
 def sync_account_names() -> dict[str, int]:
-	created: dict[str, int] = {}
-	if not ACCOUNT_NAMES_PATH.exists():
-		return created
+    created: dict[str, int] = {}
+    if not ACCOUNT_NAMES_PATH.exists():
+        return created
 
-	wb = load_workbook(ACCOUNT_NAMES_PATH, data_only=True, read_only=True)
-	for ws in wb.worksheets:
-		for cell in ws[2]:
-			if cell.value in (None, "", "."):
-				continue
-			name = str(cell.value).strip()
-			if not name:
-				continue
-			existing = find_account_by_normalized_name(name)
-			if existing:
-				created[name] = existing["id"]
-				continue
-			cursor = execute(
-				"INSERT OR IGNORE INTO accounts (name, source_sheet) VALUES (?, ?)",
-				(name, ws.title),
-			)
-			account_id = cursor.lastrowid
-			if not account_id:
-				row = query_one("SELECT id FROM accounts WHERE name = ?", (name,))
-				account_id = row["id"] if row else None
-			if account_id:
-				created[name] = account_id
-	return created
+    wb = load_workbook(ACCOUNT_NAMES_PATH, data_only=True, read_only=True)
+    for ws in wb.worksheets:
+        for row in ws.iter_rows(min_col=1, max_col=1):
+            cell = row[0]
+            if cell.value in (None, "", "."):
+                continue
+            name = str(cell.value).strip()
+            if not name:
+                continue
+            existing = find_account_by_normalized_name(name)
+            if existing:
+                created[name] = existing["id"]
+                continue
+            cursor = execute(
+                "INSERT OR IGNORE INTO accounts (name, source_sheet) VALUES (?, ?)",
+                (name, ws.title),
+            )
+            account_id = cursor.lastrowid
+            if not account_id:
+                row = query_one("SELECT id FROM accounts WHERE name = ?", (name,))
+                account_id = row["id"] if row else None
+            if account_id:
+                created[name] = account_id
+    return created
 
 
 def find_account_by_normalized_name(name: str) -> sqlite3.Row | None:
