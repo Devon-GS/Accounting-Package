@@ -1,0 +1,81 @@
+:root {
+  --app-bg: #08131f;
+  --app-bg-2: #10263d;
+  --app-accent: #2fb5a8;
+  --app-accent-2: #f4b942;
+  --app-surface: rgba(255, 255, 255, 0.95);
+}
+
+body {
+  background:
+    radial-gradient(circle at top left, rgba(47, 181, 168, 0.18), transparent 32%),
+    radial-gradient(circle at top right, rgba(244, 185, 66, 0.18), transparent 24%),
+    linear-gradient(180deg, #f4f7fb 0%, #eaf0f7 100%);
+  min-height: 100vh;
+}
+
+.app-nav {
+  background: linear-gradient(90deg, var(--app-bg), var(--app-bg-2));
+  box-shadow: 0 10px 30px rgba(7, 19, 31, 0.25);
+}
+
+.hero {
+  overflow: hidden;
+  color: white;
+  background:
+    linear-gradient(135deg, rgba(8, 19, 31, 0.96), rgba(16, 38, 61, 0.92)),
+    radial-gradient(circle at top right, rgba(47, 181, 168, 0.35), transparent 24%);
+  border-radius: 1.5rem;
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.75rem;
+  color: #a8dfe0;
+}
+
+.stats-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.stat-card,
+.panel-card {
+  border-radius: 1.25rem;
+}
+
+.stat-card {
+  padding: 1.2rem;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(8px);
+}
+
+.stat-value {
+  font-size: 2rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.stat-label {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.panel-card {
+  border: 1px solid rgba(8, 19, 31, 0.06);
+}
+
+.empty-state {
+  border: 1px dashed rgba(8, 19, 31, 0.18);
+  border-radius: 1rem;
+  padding: 1.25rem;
+  text-align: center;
+  color: #536271;
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.table > :not(caption) > * > * {
+  padding-top: 0.85rem;
+  padding-bottom: 0.85rem;
+}

@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% set title = "Cash Payments" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start flex-wrap gap-3 mb-4">
+  <div>
+    <p class="eyebrow mb-2">Stage 1</p>
+    <h1 class="h2 fw-bold mb-1">Cash Payments</h1>
+    <p class="text-body-secondary mb-0">Upload a folder of Excel workbooks and the app will pull rows from `A18:E33`.</p>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-5">
+    <div class="card shadow-sm border-0 panel-card">
+      <div class="card-body p-4">
+        <h2 class="h5 fw-bold mb-3">Upload Folder</h2>
+        <form method="post" action="{{ url_for('upload_cash_payments') }}" enctype="multipart/form-data">
+          <label class="form-label">Excel folder or files</label>
+          <input class="form-control mb-3" type="file" name="files" multiple webkitdirectory directory accept=".xlsx,.xlsm">
+          <div class="form-text mb-3">Select the folder that contains the cash payment Excel files.</div>
+          <button type="submit" class="btn btn-primary">Import workbook(s)</button>
+        </form>
+      </div>
+    </div>
+
+    {% if summary and summary.files %}
+    <div class="card shadow-sm border-0 panel-card mt-4">
+      <div class="card-body p-4">
+        <h2 class="h5 fw-bold mb-3">Latest Batch</h2>
+        <div class="small text-body-secondary mb-2">Batch ID: {{ batch_id }}</div>
+        <ul class="list-unstyled mb-0">
+          {% for file in summary.files %}
+            <li class="mb-2">
+              <span class="fw-semibold">{{ file.original_filename }}</span><br>
+              <span class="text-body-secondary">Date: {{ file.file_date }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card shadow-sm border-0 panel-card">
+      <div class="card-body p-4">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h2 class="h5 fw-bold mb-0">Recent Payments</h2>
+          <span class="badge text-bg-dark">{{ summary.recent|length if summary else 0 }} shown</span>
+        </div>
+        {% if summary and summary.recent %}
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Supplier</th>
+                  <th class="text-end">Amount</th>
+                  <th>Account</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in summary.recent %}
+                  <tr>
+                    <td>{{ row.payment_date }}</td>
+                    <td>{{ row.supplier_name }}</td>
+                    <td class="text-end">{{ "%.2f"|format(row.amount_paid) }}</td>
+                    <td>{{ row.account_name }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="empty-state">
+            No payments have been finalized yet.
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if summary and summary.unresolved %}
+<div class="modal fade" id="resolveModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <h2 class="modal-title h5 mb-1">Resolve supplier mappings</h2>
+          <div class="text-body-secondary">Link unknown suppliers to existing accounts or create new ones.</div>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <form method="post" action="{{ url_for('resolve_cash_payments', batch_id=batch_id) }}">
+        <div class="modal-body">
+          <div class="table-responsive">
+            <table class="table align-middle">
+              <thead>
+                <tr>
+                  <th>Supplier</th>
+                  <th>Rows</th>
+                  <th>Link to existing account</th>
+                  <th>Or create new account</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in summary.unresolved %}
+                  <tr>
+                    <td class="fw-semibold">{{ item.supplier_name }}</td>
+                    <td>{{ item.item_count }}</td>
+                    <td style="min-width: 260px;">
+                      <select class="form-select" name="account_id_{{ item.supplier_key|replace(' ', '_') }}">
+                        <option value="">Choose account</option>
+                        {% for account in accounts %}
+                          <option value="{{ account.id }}">{{ account.name }}</option>
+                        {% endfor %}
+                      </select>
+                    </td>
+                    <td style="min-width: 260px;">
+                      <input class="form-control" type="text" name="new_account_{{ item.supplier_key|replace(' ', '_') }}" placeholder="New account name">
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Not now</button>
+          <button type="submit" class="btn btn-primary">Save mappings</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+{% if summary and summary.unresolved %}
+<script>
+  const resolveModal = new bootstrap.Modal(document.getElementById('resolveModal'));
+  resolveModal.show();
+</script>
+{% endif %}
+{% endblock %}
