@@ -805,6 +805,7 @@ def cash_payments():
 		batch_id=batch_id,
 		summary=summary,
 		accounts=accounts,
+		available_account_source_options=available_account_source_options(),
 	)
 
 
@@ -873,6 +874,7 @@ def eft_payments():
 		batch_id=batch_id,
 		summary=summary,
 		accounts=accounts,
+		available_account_source_options=available_account_source_options(),
 	)
 
 
@@ -944,6 +946,7 @@ def _resolve_payment_item(staged_id: int, redirect_endpoint: str):
 
 	selected_account_id = request.form.get("account_id", type=int)
 	new_account_name = request.form.get("new_account_name", "").strip()
+	new_account_source = request.form.get("new_account_source", "Manual").strip()
 	account_id = None
 	account_name = None
 
@@ -959,7 +962,8 @@ def _resolve_payment_item(staged_id: int, redirect_endpoint: str):
 			account_name = existing["name"]
 		else:
 			upper_name = canonical_account_name(new_account_name)
-			cursor = execute("INSERT INTO accounts (name) VALUES (?)", (upper_name,))
+			source_sheet = None if new_account_source == "Manual" else new_account_source
+			cursor = execute("INSERT INTO accounts (name, source_sheet) VALUES (?, ?)", (upper_name, source_sheet))
 			account_id = cursor.lastrowid
 			account_name = upper_name
 
