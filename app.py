@@ -382,15 +382,12 @@ def parse_speedpoint_bank_transaction(transaction: object) -> dict[str, object] 
 			"amount_column": amount_column,
 		}
 
-	nedlnk_match = re.match(r"^NEDLNK\s+DP\s+(?P<terminal>\d+)\s+(?P<batch>\d+)$", text, flags=re.IGNORECASE)
+	nedlnk_match = re.search(r"NEDLNK\s+DP(?:\s+(?P<terminal>\d+))?(?:\s+(?P<batch>\d+))?", text, flags=re.IGNORECASE)
 	if nedlnk_match:
 		return {
 			"transaction_type": "NEDLNK DP",
 			"bank_terminal": nedlnk_match.group("terminal"),
-			"batch_number": int(nedlnk_match.group("batch")),
-			"speedpoint_terminal": 946390,
-			"speedpoint_column": 4,
-			"amount_column": 5,
+			"batch_number": int(nedlnk_match.group("batch")) if nedlnk_match.group("batch") else None,
 		}
 
 	return None
@@ -447,12 +444,45 @@ def find_speedpoint_match(
 	return candidate_row, candidate_amount, False
 
 
+def find_speedpoint_total_match(
+	worksheet,
+	expected_amount: float,
+	start_column: int = 7,
+	end_column: int = 15,
+) -> tuple[int | None, float | None, bool]:
+	candidate_row: int | None = None
+	candidate_total: float | None = None
+	for row_number in range(1, worksheet.max_row + 1):
+		row_total = 0.0
+		has_amount = False
+		for column_number in range(start_column, end_column + 1):
+			amount = parse_amount(worksheet.cell(row=row_number, column=column_number).value)
+			if amount is None:
+				continue
+			row_total += amount
+			has_amount = True
+		if not has_amount:
+			continue
+		row_total = round(row_total, 2)
+		if row_total == expected_amount:
+			return row_number, row_total, True
+		if candidate_row is None:
+			candidate_row = row_number
+			candidate_total = row_total
+	return candidate_row, candidate_total, False
+
+
 def highlight_speedpoint_match(worksheet, row_number: int, terminal_column: int) -> None:
 	worksheet.cell(row=row_number, column=terminal_column + 1).fill = SPEEDPOINT_HIGHLIGHT
 
 
 def highlight_bank_match(worksheet, row_number: int, credit_column: int) -> None:
 	worksheet.cell(row=row_number, column=credit_column).fill = BANK_HIGHLIGHT
+
+
+def highlight_speedpoint_range(worksheet, row_number: int, start_column: int, end_column: int) -> None:
+	for column_number in range(start_column, end_column + 1):
+		worksheet.cell(row=row_number, column=column_number).fill = SPEEDPOINT_HIGHLIGHT
 
 
 def build_speedpoint_result_dir(run_id: str) -> Path:
@@ -510,23 +540,44 @@ def process_speedpoint_reconciliation(speedpoint_storage, bank_storages: list) -
 			if not transaction_info or credit_amount is None:
 				continue
 
-			terminal_column = int(transaction_info["speedpoint_column"])
 			expected_amount = float(credit_amount)
-			match_row, match_amount, exact_match = find_speedpoint_match(
-				speedpoint_sheet,
-				terminal_column,
-				int(transaction_info["batch_number"]),
-				expected_amount,
-			)
-			if exact_match and match_row is not None:
-				highlight_speedpoint_match(speedpoint_sheet, match_row, terminal_column)
-				highlight_bank_match(bank_sheet, row_number, 4)
-				total_matches += 1
-				continue
+			match_row: int | None = None
+			match_amount: float | None = None
+			exact_match = False
+			reason = "No match found"
 
-			reason = "Batch not found"
-			if match_row is not None:
-				reason = "Amount mismatch"
+			if transaction_info["transaction_type"] == "NEDLNK DP":
+				match_row, match_amount, exact_match = find_speedpoint_total_match(
+					speedpoint_sheet,
+					expected_amount,
+					start_column=7,
+					end_column=15,
+				)
+				if exact_match and match_row is not None:
+					highlight_speedpoint_range(speedpoint_sheet, match_row, 7, 15)
+					highlight_bank_match(bank_sheet, row_number, 4)
+					total_matches += 1
+					continue
+				if match_row is not None:
+					reason = "Amount mismatch"
+				else:
+					reason = "No matching G:O total"
+			else:
+				terminal_column = int(transaction_info["speedpoint_column"])
+				match_row, match_amount, exact_match = find_speedpoint_match(
+					speedpoint_sheet,
+					terminal_column,
+					int(transaction_info["batch_number"]),
+					expected_amount,
+				)
+				if exact_match and match_row is not None:
+					highlight_speedpoint_match(speedpoint_sheet, match_row, terminal_column)
+					highlight_bank_match(bank_sheet, row_number, 4)
+					total_matches += 1
+					continue
+				reason = "Batch not found"
+				if match_row is not None:
+					reason = "Amount mismatch"
 			unresolved_rows.append(
 				{
 					"file_name": bank_original_name,
@@ -534,9 +585,10 @@ def process_speedpoint_reconciliation(speedpoint_storage, bank_storages: list) -
 					"row_number": row_number,
 					"transaction": compact_text(transaction_cell.value),
 					"credit": expected_amount,
-					"terminal": transaction_info["speedpoint_terminal"],
+					"terminal": transaction_info.get("speedpoint_terminal") or transaction_info.get("bank_terminal") or "",
 					"bank_terminal": transaction_info["bank_terminal"],
 					"batch_number": transaction_info["batch_number"],
+					"transaction_type": transaction_info["transaction_type"],
 					"reason": reason,
 					"matched_row": match_row,
 					"matched_amount": match_amount,
