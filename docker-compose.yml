@@ -6,19 +6,13 @@ services:
       POSTGRES_DB: accounting
       POSTGRES_USER: accounting
       POSTGRES_PASSWORD: ${DB_PASSWORD}
-    command:
-      - postgres
-      - -c
-      - wal_level=replica
-      - -c
-      - max_wal_senders=5
-      - -c
-      - max_replication_slots=5
+      POSTGRES_REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
+    entrypoint: ["/bin/sh", "/usr/local/bin/primary-wrapper.sh"]
     volumes:
       - postgres_primary_data:/var/lib/postgresql/data
-      - ./docker/postgres-primary-init.sql:/docker-entrypoint-initdb.d/01-postgres-primary-init.sql:ro
+      - ./docker/primary-wrapper.sh:/usr/local/bin/primary-wrapper.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U accounting -d accounting"]
+      test: ["CMD-SHELL", "test -f /tmp/replication-ready && pg_isready -U accounting -d accounting"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -30,7 +24,7 @@ services:
     environment:
       POSTGRES_DB: accounting
       POSTGRES_USER: accounting
-      POSTGRES_PASSWORD: replica-bootstrap-password
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
     depends_on:
       db-primary:
