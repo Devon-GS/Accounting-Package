@@ -455,11 +455,13 @@ def parse_ofx_transactions(file_path: Path) -> list[dict[str, object]]:
 		payment_date = date_to_iso(getattr(txn, "date", None)) or date.today().isoformat()
 		if not description or amount is None:
 			continue
+		if amount >= 0:
+			continue
 		parsed.append(
 			{
 				"index": index,
 				"description": description,
-				"amount": amount,
+				"amount": abs(amount),
 				"payment_date": payment_date,
 			}
 		)
