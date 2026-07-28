@@ -348,6 +348,18 @@ def normalize_bank_transaction(value: object) -> str:
 	return compact_text(value).upper()
 
 
+def format_download_name(original_name: str, strip_leading_number: bool = False) -> str:
+	path = Path(original_name)
+	stem = path.stem.replace("_", " ")
+	if strip_leading_number:
+		stem = re.sub(r"^\s*\d+[\s._-]*", "", stem)
+	stem = re.sub(r"\s+", " ", stem).strip()
+	if not stem:
+		stem = "download"
+	suffix = path.suffix or ".xlsx"
+	return f"{stem}{suffix}"
+
+
 def parse_speedpoint_bank_transaction(transaction: object) -> dict[str, object] | None:
 	text = normalize_bank_transaction(transaction)
 	if not text:
@@ -355,13 +367,19 @@ def parse_speedpoint_bank_transaction(transaction: object) -> dict[str, object] 
 
 	speedpoint_match = re.match(r"^SPEEDPOINT\s*(?P<terminal>\d+)\s+(?P<batch>\d+)$", text, flags=re.IGNORECASE)
 	if speedpoint_match:
+		terminal = int(speedpoint_match.group("terminal"))
+		terminal_map = {
+			946389: (2, 3),
+			946390: (4, 5),
+		}
+		speedpoint_column, amount_column = terminal_map.get(terminal, (2, 3))
 		return {
 			"transaction_type": "SPEEDPOINT",
 			"bank_terminal": speedpoint_match.group("terminal"),
 			"batch_number": int(speedpoint_match.group("batch")),
-			"speedpoint_terminal": 946389,
-			"speedpoint_column": 2,
-			"amount_column": 3,
+			"speedpoint_terminal": terminal,
+			"speedpoint_column": speedpoint_column,
+			"amount_column": amount_column,
 		}
 
 	nedlnk_match = re.match(r"^NEDLNK\s+DP\s+(?P<terminal>\d+)\s+(?P<batch>\d+)$", text, flags=re.IGNORECASE)
@@ -528,10 +546,10 @@ def process_speedpoint_reconciliation(speedpoint_storage, bank_storages: list) -
 		bank_output_name = f"edited_{index:02d}_{bank_safe_name}"
 		bank_output_path = run_dir / bank_output_name
 		bank_workbook.save(bank_output_path)
-		bank_download_name = bank_safe_name if bank_safe_name.lower().endswith(".xlsx") else f"{bank_safe_name}.xlsx"
+		bank_download_name = format_download_name(bank_original_name)
 		edited_files.append(
 			{
-				"download_name": f"{index:02d}_{bank_download_name}",
+				"download_name": bank_download_name,
 				"stored_name": bank_output_name,
 				"kind": "bank",
 			}
@@ -543,7 +561,7 @@ def process_speedpoint_reconciliation(speedpoint_storage, bank_storages: list) -
 	edited_files.insert(
 		0,
 		{
-			"download_name": f"speedpoint_{speedpoint_safe_name}",
+			"download_name": format_download_name(speedpoint_original_name, strip_leading_number=True),
 			"stored_name": speedpoint_output_name,
 			"kind": "speedpoint",
 		},
@@ -552,7 +570,7 @@ def process_speedpoint_reconciliation(speedpoint_storage, bank_storages: list) -
 	manifest = {
 		"run_id": run_id,
 		"speedpoint_original_name": speedpoint_original_name,
-		"speedpoint_download_name": speedpoint_safe_name,
+		"speedpoint_download_name": format_download_name(speedpoint_original_name, strip_leading_number=True),
 		"bank_count": len(bank_storages),
 		"matched_count": total_matches,
 		"unresolved_count": len(unresolved_rows),
@@ -1040,16 +1058,6 @@ def index():
 @app.route("/expenses")
 def expenses():
 	return render_template("expenses.html", title="Expenses")
-
-
-@app.route("/speed-point-control-recon")
-def speed_point_control_recon():
-	return render_template(
-		"speed_point_control_recon.html",
-		title="Speed Point Control Recon",
-		active_page="recon",
-		show_nav=False,
-	)
 
 
 @app.route("/speed-point-control-recon/uploads", methods=["GET", "POST"])
