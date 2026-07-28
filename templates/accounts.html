@@ -16,8 +16,16 @@
         <label class="form-label" for="month">Month</label>
         <input class="form-control" type="month" id="month" name="month" value="{{ month_value or '' }}">
       </div>
-      <div class="col-sm-8 col-md-9">
-        <button class="btn btn-primary" type="submit">Show month</button>
+      <div class="col-sm-4 col-md-3">
+        <label class="form-label" for="source">Source</label>
+        <select class="form-select" id="source" name="source">
+          {% for source_value, source_text in source_options %}
+            <option value="{{ source_value }}" {% if source_value == source_type %}selected{% endif %}>{{ source_text }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-4 col-md-6">
+        <button class="btn btn-primary" type="submit">Show data</button>
         {% if month_label %}
           <span class="ms-3 text-body-secondary">Showing {{ month_label }}</span>
         {% endif %}
@@ -41,7 +49,7 @@
             {% for row in rows %}
               <tr>
                 <td>
-                  <a href="{{ url_for('account_transactions', account_id=row.account_id, month=month_value) }}" class="fw-semibold text-decoration-none">
+                  <a href="{{ url_for('account_transactions', account_id=row.account_id, month=month_value, source=source_type) }}" class="fw-semibold text-decoration-none">
                     {{ row.account_name }}
                   </a>
                 </td>

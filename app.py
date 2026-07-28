@@ -616,6 +616,28 @@ def available_payment_months() -> list[sqlite3.Row]:
 	)
 
 
+def available_payment_sources() -> list[str]:
+	rows = query_all(
+		"""
+		SELECT DISTINCT source_type
+		FROM import_batches
+		WHERE source_type IS NOT NULL AND TRIM(source_type) <> ''
+		ORDER BY source_type
+		"""
+	)
+	return [row["source_type"] for row in rows]
+
+
+def source_label(source_type: str | None) -> str:
+	if source_type == "cash":
+		return "Cash Payments"
+	if source_type == "eft":
+		return "EFT Payments"
+	if not source_type:
+		return "All sources"
+	return source_type.replace("_", " ").title()
+
+
 def month_label(month_value: str) -> str:
 	return datetime.strptime(month_value, "%Y-%m").strftime("%B %Y")
 
@@ -669,43 +691,58 @@ def batch_summary(batch_id: int) -> dict:
 	}
 
 
-def account_summary_for_month(month_value: str) -> list[sqlite3.Row]:
-    return query_all(
-        """
-        SELECT
-            accounts.id AS account_id,
-            accounts.name AS account_name,
-            SUM(payments.amount_paid) AS amount_paid
-        FROM payments
-        JOIN accounts ON accounts.id = payments.account_id
-        WHERE strftime('%Y-%m', payments.payment_date) = ?
-        GROUP BY accounts.id, accounts.name
-        ORDER BY accounts.name
-        """,
-        (month_value,),
-    )
+def account_summary_for_month(month_value: str, source_type: str | None = None) -> list[sqlite3.Row]:
+	params: list[object] = [month_value]
+	source_clause = ""
+	if source_type and source_type != "all":
+		source_clause = " AND import_batches.source_type = ?"
+		params.append(source_type)
+	return query_all(
+		f"""
+		SELECT
+			accounts.id AS account_id,
+			accounts.name AS account_name,
+			SUM(payments.amount_paid) AS amount_paid
+		FROM payments
+		JOIN accounts ON accounts.id = payments.account_id
+		JOIN import_files ON import_files.file_hash = payments.source_file_hash
+		JOIN import_batches ON import_batches.id = import_files.batch_id
+		WHERE strftime('%Y-%m', payments.payment_date) = ?{source_clause}
+		GROUP BY accounts.id, accounts.name
+		ORDER BY accounts.name
+		""",
+		tuple(params),
+	)
 
 
-def account_transactions_for_month(month_value: str, account_id: int) -> list[sqlite3.Row]:
-    return query_all(
-        """
-        SELECT
-            payments.payment_date,
-            payments.supplier_name,
-            payments.amount_paid,
-            accounts.name AS account_name,
-            payments.source_file_name,
-            payments.source_sheet,
-            payments.source_row,
-            payments.source_column
-        FROM payments
-        JOIN accounts ON accounts.id = payments.account_id
-        WHERE strftime('%Y-%m', payments.payment_date) = ?
-          AND payments.account_id = ?
-        ORDER BY payments.payment_date, payments.id
-        """,
-        (month_value, account_id),
-    )
+def account_transactions_for_month(month_value: str, account_id: int, source_type: str | None = None) -> list[sqlite3.Row]:
+	params: list[object] = [month_value, account_id]
+	source_clause = ""
+	if source_type and source_type != "all":
+		source_clause = " AND import_batches.source_type = ?"
+		params.append(source_type)
+	return query_all(
+		f"""
+		SELECT
+			payments.payment_date,
+			payments.supplier_name,
+			payments.amount_paid,
+			accounts.name AS account_name,
+			payments.source_file_name,
+			payments.source_sheet,
+			payments.source_row,
+			payments.source_column,
+			import_batches.source_type AS source_type
+		FROM payments
+		JOIN accounts ON accounts.id = payments.account_id
+		JOIN import_files ON import_files.file_hash = payments.source_file_hash
+		JOIN import_batches ON import_batches.id = import_files.batch_id
+		WHERE strftime('%Y-%m', payments.payment_date) = ?
+		  AND payments.account_id = ?{source_clause}
+		ORDER BY payments.payment_date, payments.id
+		""",
+		tuple(params),
+	)
 
 
 @app.before_request
@@ -935,15 +972,25 @@ def resolve_eft_payment_item(staged_id: int):
 @app.route("/accounts", methods=["GET", "POST"])
 def accounts():
     month_value = normalize_month(request.args.get("month")) or latest_payment_month()
+    source_type = request.args.get("source") or "all"
     month_options = available_payment_months()
+    source_options = [("all", "All sources")] + [
+        (source_type_value, source_label(source_type_value)) for source_type_value in available_payment_sources()
+    ]
+    valid_source_types = {value for value, _ in source_options}
+    if source_type not in valid_source_types:
+        source_type = "all"
     if not month_value and month_options:
         month_value = month_options[0]["month_value"]
-    rows = account_summary_for_month(month_value) if month_value else []
+    rows = account_summary_for_month(month_value, source_type) if month_value else []
     return render_template(
         "accounts.html",
         month_value=month_value,
         month_label=month_label(month_value) if month_value else None,
         month_options=month_options,
+        source_type=source_type,
+        source_label=source_label(source_type),
+        source_options=source_options,
         rows=rows,
     )
 
@@ -956,10 +1003,17 @@ def account_transactions(account_id: int):
         return redirect(url_for("accounts"))
 
     month_value = normalize_month(request.args.get("month")) or latest_payment_month()
+    source_type = request.args.get("source") or "all"
     month_options = available_payment_months()
+    source_options = [("all", "All sources")] + [
+        (source_type_value, source_label(source_type_value)) for source_type_value in available_payment_sources()
+    ]
+    valid_source_types = {value for value, _ in source_options}
+    if source_type not in valid_source_types:
+        source_type = "all"
     if not month_value and month_options:
         month_value = month_options[0]["month_value"]
-    transactions = account_transactions_for_month(month_value, account_id) if month_value else []
+    transactions = account_transactions_for_month(month_value, account_id, source_type) if month_value else []
     total_amount = sum(row["amount_paid"] for row in transactions)
     return render_template(
         "account_transactions.html",
@@ -968,6 +1022,9 @@ def account_transactions(account_id: int):
         month_value=month_value,
         month_label=month_label(month_value) if month_value else None,
         month_options=month_options,
+        source_type=source_type,
+        source_label=source_label(source_type),
+        source_options=source_options,
         transactions=transactions,
         total_amount=total_amount,
     )

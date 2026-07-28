@@ -20,15 +20,27 @@
         <label class="form-label" for="month">Month</label>
         <input class="form-control" type="month" id="month" name="month" value="{{ month_value or '' }}">
       </div>
-      <div class="col-sm-8 col-md-9">
-        <button class="btn btn-primary" type="submit">Show month</button>
-        <a class="btn btn-outline-secondary ms-2" href="{{ url_for('accounts', month=month_value) }}">Back to Accounts</a>
+      <div class="col-sm-4 col-md-3">
+        <label class="form-label" for="source">Source</label>
+        <select class="form-select" id="source" name="source">
+          {% for source_value, source_text in source_options %}
+            <option value="{{ source_value }}" {% if source_value == source_type %}selected{% endif %}>{{ source_text }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-4 col-md-6">
+        <button class="btn btn-primary" type="submit">Show data</button>
+        <a class="btn btn-outline-secondary ms-2" href="{{ url_for('accounts', month=month_value, source=source_type) }}">Back to Accounts</a>
         {% if month_label %}
           <span class="ms-3 text-body-secondary">Showing {{ month_label }}</span>
         {% endif %}
       </div>
     </form>
   </div>
+</div>
+
+<div class="mb-3 text-body-secondary">
+  Source: {{ source_label }}
 </div>
 
 <div class="card shadow-sm border-0 panel-card">
