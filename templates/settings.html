@@ -40,14 +40,44 @@
                 <th>Name</th>
                 <th>Source</th>
                 <th class="text-end">Linked suppliers</th>
+                <th class="text-end">Actions</th>
               </tr>
             </thead>
             <tbody>
               {% for account in accounts %}
                 <tr>
-                  <td>{{ account.name }}</td>
-                  <td>{{ account.source_sheet or "Manual" }}</td>
+                  <td>
+                    <form id="account-edit-{{ account.id }}" method="post" class="d-flex flex-column gap-2">
+                      <input type="hidden" name="action" value="update_account">
+                      <input type="hidden" name="account_id" value="{{ account.id }}">
+                      <input class="form-control form-control-sm" type="text" name="account_name" value="{{ account.name }}">
+                    </form>
+                  </td>
+                  <td style="min-width: 180px;">
+                    <select class="form-select form-select-sm" name="account_source" form="account-edit-{{ account.id }}">
+                      {% for source_value, source_text in available_account_source_options %}
+                        <option value="{{ source_value }}" {% if (account.source_sheet or "Manual") == source_value %}selected{% endif %}>{{ source_text }}</option>
+                      {% endfor %}
+                    </select>
+                  </td>
                   <td class="text-end">{{ account.linked_suppliers }}</td>
+                  <td class="text-end">
+                    <div class="d-inline-flex gap-2">
+                      <button class="btn btn-sm btn-outline-primary" type="submit" form="account-edit-{{ account.id }}">Save</button>
+                      <form id="account-delete-{{ account.id }}" method="post" class="d-inline">
+                        <input type="hidden" name="action" value="delete_account">
+                        <input type="hidden" name="account_id" value="{{ account.id }}">
+                      </form>
+                      <button
+                        class="btn btn-sm btn-outline-danger"
+                        type="submit"
+                        form="account-delete-{{ account.id }}"
+                        onclick="return confirm('Delete account {{ account.name }}? This cannot be undone.');"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               {% endfor %}
             </tbody>

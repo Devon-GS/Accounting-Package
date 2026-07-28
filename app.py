@@ -264,11 +264,13 @@ def sync_account_names() -> dict[str, int]:
     return created
 
 
-def find_account_by_normalized_name(name: str) -> sqlite3.Row | None:
+def find_account_by_normalized_name(name: str, exclude_account_id: int | None = None) -> sqlite3.Row | None:
     target = normalize_text(name)
     if not target:
         return None
     for account in query_all("SELECT id, name FROM accounts"):
+        if exclude_account_id is not None and account["id"] == exclude_account_id:
+            continue
         if normalize_text(account["name"]) == target:
             return account
     return None
@@ -1059,17 +1061,61 @@ def account_transactions(account_id: int):
 @app.route("/settings", methods=["GET", "POST"])
 def settings():
     if request.method == "POST":
-        account_name = request.form.get("account_name", "").strip()
-        source_value = request.form.get("account_source", "Manual").strip()
-        if account_name:
-            existing = find_account_by_normalized_name(account_name)
-            if existing:
-                flash(f"Account '{account_name}' already exists.", "info")
+        action = request.form.get("action", "create_account").strip()
+        if action == "update_account":
+            account_id = request.form.get("account_id", type=int)
+            account_name = request.form.get("account_name", "").strip()
+            source_value = request.form.get("account_source", "Manual").strip()
+            if not account_id:
+                flash("Could not update the selected account.", "danger")
             else:
-                upper_name = canonical_account_name(account_name)
-                source_sheet = None if source_value == "Manual" else source_value
-                execute("INSERT INTO accounts (name, source_sheet) VALUES (?, ?)", (upper_name, source_sheet))
-                flash(f"Created account '{upper_name}'.", "success")
+                existing = query_one("SELECT id FROM accounts WHERE id = ?", (account_id,))
+                if not existing:
+                    flash("That account no longer exists.", "warning")
+                elif not account_name:
+                    flash("Account name cannot be empty.", "warning")
+                else:
+                    upper_name = canonical_account_name(account_name)
+                    duplicate = find_account_by_normalized_name(upper_name, exclude_account_id=account_id)
+                    if duplicate:
+                        flash(f"Account '{upper_name}' already exists.", "info")
+                    else:
+                        source_sheet = None if source_value == "Manual" else source_value
+                        execute(
+                            "UPDATE accounts SET name = ?, source_sheet = ? WHERE id = ?",
+                            (upper_name, source_sheet, account_id),
+                        )
+                        flash(f"Updated account '{upper_name}'.", "success")
+        elif action == "delete_account":
+            account_id = request.form.get("account_id", type=int)
+            if not account_id:
+                flash("Could not delete the selected account.", "danger")
+            else:
+                account = query_one("SELECT name FROM accounts WHERE id = ?", (account_id,))
+                if not account:
+                    flash("That account no longer exists.", "warning")
+                else:
+                    try:
+                        execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+                    except sqlite3.IntegrityError:
+                        flash(
+                            f"Cannot delete account '{account['name']}' because it is still used by payments.",
+                            "warning",
+                        )
+                    else:
+                        flash(f"Deleted account '{account['name']}'.", "success")
+        else:
+            account_name = request.form.get("account_name", "").strip()
+            source_value = request.form.get("account_source", "Manual").strip()
+            if account_name:
+                existing = find_account_by_normalized_name(account_name)
+                if existing:
+                    flash(f"Account '{account_name}' already exists.", "info")
+                else:
+                    upper_name = canonical_account_name(account_name)
+                    source_sheet = None if source_value == "Manual" else source_value
+                    execute("INSERT INTO accounts (name, source_sheet) VALUES (?, ?)", (upper_name, source_sheet))
+                    flash(f"Created account '{upper_name}'.", "success")
         return redirect(url_for("settings"))
 
     account_rows = query_all(
