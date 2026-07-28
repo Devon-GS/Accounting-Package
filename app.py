@@ -28,12 +28,26 @@ from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 from werkzeug.utils import secure_filename
 
+try:
+	import psycopg
+	from psycopg.rows import dict_row
+except ImportError:  # pragma: no cover - optional for local SQLite-only runs
+	psycopg = None
+	dict_row = None
+
+if psycopg is None:
+	DB_INTEGRITY_ERROR = (sqlite3.IntegrityError,)
+else:
+	DB_INTEGRITY_ERROR = (sqlite3.IntegrityError, psycopg.IntegrityError)
+
 
 BASE_DIR = Path(__file__).resolve().parent
 INSTANCE_DIR = BASE_DIR / "instance"
 UPLOAD_DIR = INSTANCE_DIR / "uploads"
 SPEEDPOINT_RUNS_DIR = UPLOAD_DIR / "speedpoint_runs"
 DB_PATH = INSTANCE_DIR / "accounting.db"
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+USE_POSTGRES = bool(DATABASE_URL)
 ACCOUNT_NAMES_PATH = BASE_DIR / "Account Names.xlsx"
 
 SUPPORTED_EXTENSIONS = {".xlsx", ".xlsm"}
@@ -46,6 +60,32 @@ BANK_HIGHLIGHT = PatternFill(fill_type="solid", fgColor="FFFF00")
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-accounting-secret")
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
+
+
+class QueryResult:
+	def __init__(self, cursor, lastrowid: int | None = None):
+		self._cursor = cursor
+		self.lastrowid = lastrowid
+		self.rowcount = getattr(cursor, "rowcount", -1)
+
+	def fetchone(self):
+		return self._cursor.fetchone()
+
+	def fetchall(self):
+		return self._cursor.fetchall()
+
+	def __getattr__(self, name: str):
+		return getattr(self._cursor, name)
+
+
+def _translate_sql(sql: str) -> str:
+	if not USE_POSTGRES:
+		return sql
+	return sql.replace("?", "%s")
+
+
+def _postgre_insert_with_returning(sql: str) -> bool:
+	return USE_POSTGRES and sql.lstrip().lower().startswith("insert") and "returning" not in sql.lower()
 
 
 def normalize_text(value: object) -> str:
@@ -132,108 +172,63 @@ def allowed_file(filename: str) -> bool:
 
 def get_connection() -> sqlite3.Connection:
 	if "db" not in g:
-		conn = sqlite3.connect(DB_PATH)
-		conn.row_factory = sqlite3.Row
-		conn.execute("PRAGMA foreign_keys = ON")
+		if USE_POSTGRES:
+			if psycopg is None or dict_row is None:
+				raise RuntimeError("DATABASE_URL is set, but psycopg is not installed.")
+			conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+		else:
+			conn = sqlite3.connect(DB_PATH)
+			conn.row_factory = sqlite3.Row
+			conn.execute("PRAGMA foreign_keys = ON")
 		g.db = conn
 	return g.db
 
 
 def query_one(sql: str, params: tuple = ()) -> sqlite3.Row | None:
-	return get_connection().execute(sql, params).fetchone()
+	return get_connection().execute(_translate_sql(sql), params).fetchone()
 
 
 def query_all(sql: str, params: tuple = ()) -> list[sqlite3.Row]:
-	return get_connection().execute(sql, params).fetchall()
+	return get_connection().execute(_translate_sql(sql), params).fetchall()
 
 
 def execute(sql: str, params: tuple = ()) -> sqlite3.Cursor:
 	conn = get_connection()
-	cur = conn.execute(sql, params)
+	translated_sql = _translate_sql(sql)
+	lastrowid = None
+	if _postgre_insert_with_returning(sql):
+		translated_sql = f"{translated_sql.rstrip().rstrip(';')} RETURNING id"
+	cur = conn.execute(translated_sql, params)
+	if _postgre_insert_with_returning(sql):
+		row = cur.fetchone()
+		lastrowid = row["id"] if row else None
+	elif not USE_POSTGRES:
+		lastrowid = None if getattr(cur, "rowcount", -1) == 0 else cur.lastrowid
 	conn.commit()
-	return cur
+	return QueryResult(cur, lastrowid)
 
 
 def initialize_storage() -> None:
 	INSTANCE_DIR.mkdir(exist_ok=True)
 	UPLOAD_DIR.mkdir(exist_ok=True)
 	SPEEDPOINT_RUNS_DIR.mkdir(exist_ok=True)
+	if USE_POSTGRES:
+		with closing(psycopg.connect(DATABASE_URL, row_factory=dict_row)) as conn:
+			for statement in postgres_schema_statements():
+				conn.execute(statement)
+			columns = postgres_table_columns(conn, "import_batches")
+			if "source_type" not in columns:
+				conn.execute("ALTER TABLE import_batches ADD COLUMN source_type TEXT NOT NULL DEFAULT 'cash'")
+			conn.execute(
+				"UPDATE import_batches SET source_type = 'cash' WHERE source_type IS NULL OR TRIM(source_type) = ''"
+			)
+			conn.commit()
+		return
+
 	with closing(sqlite3.connect(DB_PATH)) as conn:
 		conn.row_factory = sqlite3.Row
 		conn.execute("PRAGMA foreign_keys = ON")
-		conn.executescript(
-			"""
-			CREATE TABLE IF NOT EXISTS accounts (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				name TEXT NOT NULL UNIQUE,
-				source_sheet TEXT,
-				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-			);
-
-			CREATE TABLE IF NOT EXISTS supplier_rules (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				supplier_key TEXT NOT NULL UNIQUE,
-				supplier_name TEXT NOT NULL,
-				account_id INTEGER NOT NULL,
-				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE
-			);
-
-			CREATE TABLE IF NOT EXISTS import_batches (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				source_folder TEXT,
-				source_type TEXT NOT NULL DEFAULT 'cash',
-				status TEXT NOT NULL DEFAULT 'open'
-			);
-
-			CREATE TABLE IF NOT EXISTS import_files (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				batch_id INTEGER NOT NULL,
-				original_filename TEXT NOT NULL,
-				stored_filename TEXT NOT NULL,
-				file_hash TEXT NOT NULL UNIQUE,
-				file_date TEXT NOT NULL,
-				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				FOREIGN KEY (batch_id) REFERENCES import_batches (id) ON DELETE CASCADE
-			);
-
-			CREATE TABLE IF NOT EXISTS staged_payments (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				batch_id INTEGER NOT NULL,
-				file_id INTEGER NOT NULL,
-				payment_date TEXT NOT NULL,
-				supplier_name TEXT NOT NULL,
-				supplier_key TEXT NOT NULL,
-				amount_paid REAL NOT NULL,
-				source_sheet TEXT NOT NULL,
-				source_row INTEGER NOT NULL,
-				source_column INTEGER NOT NULL,
-				account_id INTEGER,
-				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				UNIQUE (file_id, source_sheet, source_row, source_column),
-				FOREIGN KEY (batch_id) REFERENCES import_batches (id) ON DELETE CASCADE,
-				FOREIGN KEY (file_id) REFERENCES import_files (id) ON DELETE CASCADE,
-				FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE SET NULL
-			);
-
-			CREATE TABLE IF NOT EXISTS payments (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				payment_date TEXT NOT NULL,
-				supplier_name TEXT NOT NULL,
-				amount_paid REAL NOT NULL,
-				account_id INTEGER NOT NULL,
-				source_file_name TEXT NOT NULL,
-				source_file_hash TEXT NOT NULL,
-				source_sheet TEXT NOT NULL,
-				source_row INTEGER NOT NULL,
-				source_column INTEGER NOT NULL,
-				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				UNIQUE (source_file_hash, source_sheet, source_row, source_column),
-				FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE RESTRICT
-			);
-			"""
-		)
+		conn.executescript("\n".join(sqlite_schema_statements()))
 		columns = {row["name"] for row in conn.execute("PRAGMA table_info(import_batches)")}
 		if "source_type" not in columns:
 			conn.execute("ALTER TABLE import_batches ADD COLUMN source_type TEXT NOT NULL DEFAULT 'cash'")
@@ -241,6 +236,181 @@ def initialize_storage() -> None:
 			"UPDATE import_batches SET source_type = 'cash' WHERE source_type IS NULL OR TRIM(source_type) = ''"
 		)
 		conn.commit()
+
+
+def postgres_table_columns(conn, table_name: str) -> set[str]:
+	rows = conn.execute(
+		"""
+		SELECT column_name
+		FROM information_schema.columns
+		WHERE table_schema = current_schema()
+		  AND table_name = %s
+		""",
+		(table_name,),
+	).fetchall()
+	return {row["column_name"] for row in rows}
+
+
+def sqlite_schema_statements() -> list[str]:
+	return [
+		"""
+		CREATE TABLE IF NOT EXISTS accounts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE,
+			source_sheet TEXT,
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)
+		""",
+		"""
+		CREATE TABLE IF NOT EXISTS supplier_rules (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			supplier_key TEXT NOT NULL UNIQUE,
+			supplier_name TEXT NOT NULL,
+			account_id INTEGER NOT NULL,
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE
+		)
+		""",
+		"""
+		CREATE TABLE IF NOT EXISTS import_batches (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			source_folder TEXT,
+			source_type TEXT NOT NULL DEFAULT 'cash',
+			status TEXT NOT NULL DEFAULT 'open'
+		)
+		""",
+		"""
+		CREATE TABLE IF NOT EXISTS import_files (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			batch_id INTEGER NOT NULL,
+			original_filename TEXT NOT NULL,
+			stored_filename TEXT NOT NULL,
+			file_hash TEXT NOT NULL UNIQUE,
+			file_date TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (batch_id) REFERENCES import_batches (id) ON DELETE CASCADE
+		)
+		""",
+		"""
+		CREATE TABLE IF NOT EXISTS staged_payments (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			batch_id INTEGER NOT NULL,
+			file_id INTEGER NOT NULL,
+			payment_date TEXT NOT NULL,
+			supplier_name TEXT NOT NULL,
+			supplier_key TEXT NOT NULL,
+			amount_paid REAL NOT NULL,
+			source_sheet TEXT NOT NULL,
+			source_row INTEGER NOT NULL,
+			source_column INTEGER NOT NULL,
+			account_id INTEGER,
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE (file_id, source_sheet, source_row, source_column),
+			FOREIGN KEY (batch_id) REFERENCES import_batches (id) ON DELETE CASCADE,
+			FOREIGN KEY (file_id) REFERENCES import_files (id) ON DELETE CASCADE,
+			FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE SET NULL
+		)
+		""",
+		"""
+		CREATE TABLE IF NOT EXISTS payments (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			payment_date TEXT NOT NULL,
+			supplier_name TEXT NOT NULL,
+			amount_paid REAL NOT NULL,
+			account_id INTEGER NOT NULL,
+			source_file_name TEXT NOT NULL,
+			source_file_hash TEXT NOT NULL,
+			source_sheet TEXT NOT NULL,
+			source_row INTEGER NOT NULL,
+			source_column INTEGER NOT NULL,
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE (source_file_hash, source_sheet, source_row, source_column),
+			FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE RESTRICT
+		)
+		""",
+	]
+
+
+def postgres_schema_statements() -> list[str]:
+	return [
+		"""
+		CREATE TABLE IF NOT EXISTS accounts (
+			id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			source_sheet TEXT,
+			created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text)
+		)
+		""",
+		"""
+		CREATE TABLE IF NOT EXISTS supplier_rules (
+			id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+			supplier_key TEXT NOT NULL UNIQUE,
+			supplier_name TEXT NOT NULL,
+			account_id INTEGER NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text),
+			FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE
+		)
+		""",
+		"""
+		CREATE TABLE IF NOT EXISTS import_batches (
+			id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+			created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text),
+			source_folder TEXT,
+			source_type TEXT NOT NULL DEFAULT 'cash',
+			status TEXT NOT NULL DEFAULT 'open'
+		)
+		""",
+		"""
+		CREATE TABLE IF NOT EXISTS import_files (
+			id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+			batch_id INTEGER NOT NULL,
+			original_filename TEXT NOT NULL,
+			stored_filename TEXT NOT NULL,
+			file_hash TEXT NOT NULL UNIQUE,
+			file_date TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text),
+			FOREIGN KEY (batch_id) REFERENCES import_batches (id) ON DELETE CASCADE
+		)
+		""",
+		"""
+		CREATE TABLE IF NOT EXISTS staged_payments (
+			id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+			batch_id INTEGER NOT NULL,
+			file_id INTEGER NOT NULL,
+			payment_date TEXT NOT NULL,
+			supplier_name TEXT NOT NULL,
+			supplier_key TEXT NOT NULL,
+			amount_paid REAL NOT NULL,
+			source_sheet TEXT NOT NULL,
+			source_row INTEGER NOT NULL,
+			source_column INTEGER NOT NULL,
+			account_id INTEGER,
+			created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text),
+			UNIQUE (file_id, source_sheet, source_row, source_column),
+			FOREIGN KEY (batch_id) REFERENCES import_batches (id) ON DELETE CASCADE,
+			FOREIGN KEY (file_id) REFERENCES import_files (id) ON DELETE CASCADE,
+			FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE SET NULL
+		)
+		""",
+		"""
+		CREATE TABLE IF NOT EXISTS payments (
+			id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+			payment_date TEXT NOT NULL,
+			supplier_name TEXT NOT NULL,
+			amount_paid REAL NOT NULL,
+			account_id INTEGER NOT NULL,
+			source_file_name TEXT NOT NULL,
+			source_file_hash TEXT NOT NULL,
+			source_sheet TEXT NOT NULL,
+			source_row INTEGER NOT NULL,
+			source_column INTEGER NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text),
+			UNIQUE (source_file_hash, source_sheet, source_row, source_column),
+			FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE RESTRICT
+		)
+		""",
+	]
 
 
 def sync_account_names() -> dict[str, int]:
@@ -262,7 +432,7 @@ def sync_account_names() -> dict[str, int]:
                 created[name] = existing["id"]
                 continue
             cursor = execute(
-                "INSERT OR IGNORE INTO accounts (name, source_sheet) VALUES (?, ?)",
+                "INSERT INTO accounts (name, source_sheet) VALUES (?, ?) ON CONFLICT (name) DO NOTHING",
                 (name, ws.title),
             )
             account_id = cursor.lastrowid
@@ -697,11 +867,12 @@ def stage_workbook(
                     account_id = account["id"]
                 execute(
                     """
-                    INSERT OR IGNORE INTO staged_payments (
+                    INSERT INTO staged_payments (
                         batch_id, file_id, payment_date, supplier_name, supplier_key,
                         amount_paid, source_sheet, source_row, source_column, account_id
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (file_id, source_sheet, source_row, source_column) DO NOTHING
                     """,
                     (
                         batch_id,
@@ -831,11 +1002,12 @@ def stage_ofx_file(
 				account_id = account["account_id"]
 			execute(
 				"""
-				INSERT OR IGNORE INTO staged_payments (
+				INSERT INTO staged_payments (
 					batch_id, file_id, payment_date, supplier_name, supplier_key,
 					amount_paid, source_sheet, source_row, source_column, account_id
 				)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT (file_id, source_sheet, source_row, source_column) DO NOTHING
 				""",
 				(
 					batch_id,
@@ -860,10 +1032,9 @@ def stage_ofx_file(
 
 
 def finalize_resolved_rows(batch_id: int) -> int:
-	conn = get_connection()
-	cursor = conn.execute(
+	cursor = execute(
 		"""
-		INSERT OR IGNORE INTO payments (
+		INSERT INTO payments (
 			payment_date, supplier_name, amount_paid, account_id,
 			source_file_name, source_file_hash, source_sheet, source_row, source_column
 		)
@@ -881,10 +1052,10 @@ def finalize_resolved_rows(batch_id: int) -> int:
 		JOIN import_files ON import_files.id = staged_payments.file_id
 		WHERE staged_payments.batch_id = ?
 		  AND staged_payments.account_id IS NOT NULL
+		ON CONFLICT (source_file_hash, source_sheet, source_row, source_column) DO NOTHING
 		""",
 		(batch_id,),
 	)
-	conn.commit()
 	return cursor.rowcount if cursor.rowcount != -1 else 0
 
 
@@ -911,7 +1082,7 @@ def normalize_month(value: str | None) -> str:
 def latest_payment_month() -> str | None:
 	row = query_one(
 		"""
-		SELECT strftime('%Y-%m', payment_date) AS month_value
+		SELECT substr(payment_date, 1, 7) AS month_value
 		FROM payments
 		WHERE payment_date IS NOT NULL
 		ORDER BY payment_date DESC
@@ -924,7 +1095,7 @@ def latest_payment_month() -> str | None:
 def available_payment_months() -> list[sqlite3.Row]:
 	return query_all(
 		"""
-		SELECT strftime('%Y-%m', payment_date) AS month_value
+		SELECT substr(payment_date, 1, 7) AS month_value
 		FROM payments
 		WHERE payment_date IS NOT NULL
 		GROUP BY month_value
@@ -1046,7 +1217,7 @@ def account_summary_for_month(month_value: str, source_type: str | None = None) 
 		JOIN accounts ON accounts.id = payments.account_id
 		JOIN import_files ON import_files.file_hash = payments.source_file_hash
 		JOIN import_batches ON import_batches.id = import_files.batch_id
-		WHERE strftime('%Y-%m', payments.payment_date) = ?{source_clause}
+		WHERE substr(payments.payment_date, 1, 7) = ?{source_clause}
 		GROUP BY accounts.id, accounts.name
 		ORDER BY accounts.name
 		""",
@@ -1076,7 +1247,7 @@ def account_transactions_for_month(month_value: str, account_id: int, source_typ
 		JOIN accounts ON accounts.id = payments.account_id
 		JOIN import_files ON import_files.file_hash = payments.source_file_hash
 		JOIN import_batches ON import_batches.id = import_files.batch_id
-		WHERE strftime('%Y-%m', payments.payment_date) = ?
+		WHERE substr(payments.payment_date, 1, 7) = ?
 		  AND payments.account_id = ?{source_clause}
 		ORDER BY payments.payment_date, payments.id
 		""",
@@ -1342,7 +1513,7 @@ def _resolve_payment_item(staged_id: int, redirect_endpoint: str):
 		else:
 			upper_name = canonical_account_name(new_account_name)
 			source_sheet = None if new_account_source == "Manual" else new_account_source
-			cursor = execute("INSERT INTO accounts (name, source_sheet) VALUES (?, ?)", (upper_name, source_sheet))
+			cursor = execute("INSERT INTO accounts (name, source_sheet) VALUES (?, ?) ON CONFLICT (name) DO NOTHING", (upper_name, source_sheet))
 			account_id = cursor.lastrowid
 			account_name = upper_name
 
@@ -1437,92 +1608,95 @@ def account_transactions(account_id: int):
 
 @app.route("/settings", methods=["GET", "POST"])
 def settings():
-    if request.method == "POST":
-        action = request.form.get("action", "create_account").strip()
-        if action == "update_account":
-            account_id = request.form.get("account_id", type=int)
-            account_name = request.form.get("account_name", "").strip()
-            source_value = request.form.get("account_source", "Manual").strip()
-            if not account_id:
-                flash("Could not update the selected account.", "danger")
-            else:
-                existing = query_one("SELECT id FROM accounts WHERE id = ?", (account_id,))
-                if not existing:
-                    flash("That account no longer exists.", "warning")
-                elif not account_name:
-                    flash("Account name cannot be empty.", "warning")
-                else:
-                    upper_name = canonical_account_name(account_name)
-                    duplicate = find_account_by_normalized_name(upper_name, exclude_account_id=account_id)
-                    if duplicate:
-                        flash(f"Account '{upper_name}' already exists.", "info")
-                    else:
-                        source_sheet = None if source_value == "Manual" else source_value
-                        execute(
-                            "UPDATE accounts SET name = ?, source_sheet = ? WHERE id = ?",
-                            (upper_name, source_sheet, account_id),
-                        )
-                        flash(f"Updated account '{upper_name}'.", "success")
-        elif action == "delete_account":
-            account_id = request.form.get("account_id", type=int)
-            if not account_id:
-                flash("Could not delete the selected account.", "danger")
-            else:
-                account = query_one("SELECT name FROM accounts WHERE id = ?", (account_id,))
-                if not account:
-                    flash("That account no longer exists.", "warning")
-                else:
-                    try:
-                        execute("DELETE FROM accounts WHERE id = ?", (account_id,))
-                    except sqlite3.IntegrityError:
-                        flash(
-                            f"Cannot delete account '{account['name']}' because it is still used by payments.",
-                            "warning",
-                        )
-                    else:
-                        flash(f"Deleted account '{account['name']}'.", "success")
-        else:
-            account_name = request.form.get("account_name", "").strip()
-            source_value = request.form.get("account_source", "Manual").strip()
-            if account_name:
-                existing = find_account_by_normalized_name(account_name)
-                if existing:
-                    flash(f"Account '{account_name}' already exists.", "info")
-                else:
-                    upper_name = canonical_account_name(account_name)
-                    source_sheet = None if source_value == "Manual" else source_value
-                    execute("INSERT INTO accounts (name, source_sheet) VALUES (?, ?)", (upper_name, source_sheet))
-                    flash(f"Created account '{upper_name}'.", "success")
-        return redirect(url_for("settings"))
+	if request.method == "POST":
+		action = request.form.get("action", "create_account").strip()
+		if action == "update_account":
+			account_id = request.form.get("account_id", type=int)
+			account_name = request.form.get("account_name", "").strip()
+			source_value = request.form.get("account_source", "Manual").strip()
+			if not account_id:
+				flash("Could not update the selected account.", "danger")
+			else:
+				existing = query_one("SELECT id FROM accounts WHERE id = ?", (account_id,))
+				if not existing:
+					flash("That account no longer exists.", "warning")
+				elif not account_name:
+					flash("Account name cannot be empty.", "warning")
+				else:
+					upper_name = canonical_account_name(account_name)
+					duplicate = find_account_by_normalized_name(upper_name, exclude_account_id=account_id)
+					if duplicate:
+						flash(f"Account '{upper_name}' already exists.", "info")
+					else:
+						source_sheet = None if source_value == "Manual" else source_value
+						execute(
+							"UPDATE accounts SET name = ?, source_sheet = ? WHERE id = ?",
+							(upper_name, source_sheet, account_id),
+						)
+						flash(f"Updated account '{upper_name}'.", "success")
+		elif action == "delete_account":
+			account_id = request.form.get("account_id", type=int)
+			if not account_id:
+				flash("Could not delete the selected account.", "danger")
+			else:
+				account = query_one("SELECT name FROM accounts WHERE id = ?", (account_id,))
+				if not account:
+					flash("That account no longer exists.", "warning")
+				else:
+					try:
+						execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+					except DB_INTEGRITY_ERROR:
+						flash(
+							f"Cannot delete account '{account['name']}' because it is still used by payments.",
+							"warning",
+						)
+					else:
+						flash(f"Deleted account '{account['name']}'.", "success")
+		else:
+			account_name = request.form.get("account_name", "").strip()
+			source_value = request.form.get("account_source", "Manual").strip()
+			if account_name:
+				existing = find_account_by_normalized_name(account_name)
+				if existing:
+					flash(f"Account '{account_name}' already exists.", "info")
+				else:
+					upper_name = canonical_account_name(account_name)
+					source_sheet = None if source_value == "Manual" else source_value
+					execute(
+						"INSERT INTO accounts (name, source_sheet) VALUES (?, ?) ON CONFLICT (name) DO NOTHING",
+						(upper_name, source_sheet),
+					)
+					flash(f"Created account '{upper_name}'.", "success")
+		return redirect(url_for("settings"))
 
-    account_rows = query_all(
-        """
-        SELECT accounts.id, accounts.name, accounts.source_sheet,
-               COUNT(DISTINCT supplier_rules.id) AS linked_suppliers
-        FROM accounts
-        LEFT JOIN supplier_rules ON supplier_rules.account_id = accounts.id
-        GROUP BY accounts.id
-        ORDER BY accounts.name
-        """
-    )
-    rules = query_all(
-        """
-        SELECT supplier_rules.supplier_name, accounts.name AS account_name
-        FROM supplier_rules
-        JOIN accounts ON accounts.id = supplier_rules.account_id
-        ORDER BY supplier_rules.supplier_name
-        """
-    )
-    return render_template(
-        "settings.html",
-        accounts=account_rows,
-        rules=rules,
-        available_account_source_options=available_account_source_options(),
-    )
+	account_rows = query_all(
+		"""
+		SELECT accounts.id, accounts.name, accounts.source_sheet,
+		       COUNT(DISTINCT supplier_rules.id) AS linked_suppliers
+		FROM accounts
+		LEFT JOIN supplier_rules ON supplier_rules.account_id = accounts.id
+		GROUP BY accounts.id
+		ORDER BY accounts.name
+		"""
+	)
+	rules = query_all(
+		"""
+		SELECT supplier_rules.supplier_name, accounts.name AS account_name
+		FROM supplier_rules
+		JOIN accounts ON accounts.id = supplier_rules.account_id
+		ORDER BY supplier_rules.supplier_name
+		"""
+	)
+	return render_template(
+		"settings.html",
+		accounts=account_rows,
+		rules=rules,
+		available_account_source_options=available_account_source_options(),
+	)
 
 
 if __name__ == "__main__":
-    with app.app_context():
-        initialize_storage()
-        sync_account_names()
-    app.run(debug=True)
+	with app.app_context():
+		initialize_storage()
+		sync_account_names()
+	app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")), debug=os.environ.get("FLASK_DEBUG", "0") == "1")

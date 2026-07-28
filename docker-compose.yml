@@ -1,0 +1,68 @@
+services:
+  db-primary:
+    image: postgres:16-alpine
+    container_name: sasol-accounting-db-primary
+    environment:
+      POSTGRES_DB: accounting
+      POSTGRES_USER: accounting
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=5
+      - -c
+      - max_replication_slots=5
+    volumes:
+      - postgres_primary_data:/var/lib/postgresql/data
+      - ./docker/postgres-primary-init.sql:/docker-entrypoint-initdb.d/01-postgres-primary-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U accounting -d accounting"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  db-replica:
+    image: postgres:16-alpine
+    container_name: sasol-accounting-db-replica
+    environment:
+      POSTGRES_DB: accounting
+      POSTGRES_USER: accounting
+      POSTGRES_PASSWORD: replica-bootstrap-password
+      POSTGRES_REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
+    depends_on:
+      db-primary:
+        condition: service_healthy
+    volumes:
+      - postgres_replica_data:/var/lib/postgresql/data
+      - ./docker/replica-init.sh:/docker-entrypoint-initdb.d/01-replica-init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  app:
+    build: .
+    image: sasol-accounting-image
+    container_name: sasol-accounting-system
+    environment:
+      DATABASE_URL: postgresql://accounting:${DB_PASSWORD}@db-primary:5432/accounting
+      SECRET_KEY: ${APP_SECRET_KEY}
+      PORT: 5000
+    depends_on:
+      db-primary:
+        condition: service_healthy
+    ports:
+      - "5000:5000"
+    volumes:
+      - app_instance_data:/app/instance
+    restart: unless-stopped
+
+volumes:
+  app_instance_data:
+  postgres_primary_data:
+  postgres_replica_data:

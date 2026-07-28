@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+.venv/
+.git/
+.gitignore
+instance/
+*.xlsx
+*.xlsm
+*.ofx
+*.db
+*.sqlite
+*.sqlite3

@@ -1,3 +1,4 @@
 Flask>=3.1
 openpyxl>=3.1
 ofxparse>=0.21
+psycopg[binary]>=3.2
