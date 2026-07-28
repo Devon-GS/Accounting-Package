@@ -12,6 +12,8 @@ body {
     radial-gradient(circle at top right, rgba(244, 185, 66, 0.18), transparent 24%),
     linear-gradient(180deg, #f4f7fb 0%, #eaf0f7 100%);
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .app-nav {
