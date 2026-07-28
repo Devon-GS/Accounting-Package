@@ -786,15 +786,20 @@ def close_connection(_: Exception | None = None) -> None:
 
 @app.route("/")
 def index():
-	account_count = query_one("SELECT COUNT(*) AS total FROM accounts")["total"]
-	payment_count = query_one("SELECT COUNT(*) AS total FROM payments")["total"]
-	batch_count = query_one("SELECT COUNT(*) AS total FROM import_batches")["total"]
 	return render_template(
 		"index.html",
-		account_count=account_count,
-		payment_count=payment_count,
-		batch_count=batch_count,
+		show_nav=False,
 	)
+
+
+@app.route("/expenses")
+def expenses():
+	return render_template("expenses.html", title="Expenses")
+
+
+@app.route("/speed-point-control-recon")
+def speed_point_control_recon():
+	return render_template("speed_point_control_recon.html", title="Speed Point Control Recon")
 
 
 @app.route("/cash-payments", methods=["GET"])

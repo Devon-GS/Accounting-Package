@@ -30,6 +30,30 @@ body {
   border-radius: 1.5rem;
 }
 
+.home-launcher {
+  min-height: calc(100vh - 18rem);
+  display: flex;
+  align-items: center;
+}
+
+.home-launcher-inner {
+  max-width: 34rem;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.home-launcher-buttons {
+  max-width: 24rem;
+  margin: 0 auto;
+}
+
+.home-launcher-btn,
+.section-link-btn {
+  min-height: 3.6rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
 .eyebrow {
   text-transform: uppercase;
   letter-spacing: 0.18em;

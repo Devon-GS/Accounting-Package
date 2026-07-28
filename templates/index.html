@@ -1,35 +1,13 @@
 {% extends "base.html" %}
 {% set title = "Home Page" %}
 {% block content %}
-<section class="hero card border-0 shadow-lg">
+<section class="hero card border-0 shadow-lg home-launcher">
   <div class="card-body p-4 p-md-5">
-    <div class="row align-items-center g-4">
-      <div class="col-lg-7">
-        <p class="eyebrow mb-2">Accounting automation</p>
-        <h1 class="display-5 fw-bold mb-3">Build the bookkeeping workflow in stages without losing control of the data.</h1>
-        <p class="lead mb-4">
-          Start with cash payment imports from Excel folders, keep a persistent SQLite ledger, and layer in account-linking rules as the workflow matures.
-        </p>
-        <div class="d-flex gap-2 flex-wrap">
-          <a class="btn btn-primary btn-lg" href="{{ url_for('cash_payments') }}">Open Cash Payments</a>
-          <a class="btn btn-outline-light btn-lg" href="{{ url_for('accounts') }}">Review Accounts</a>
-        </div>
-      </div>
-      <div class="col-lg-5">
-        <div class="stats-grid">
-          <div class="stat-card">
-            <div class="stat-value">{{ batch_count }}</div>
-            <div class="stat-label">Imports received</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-value">{{ payment_count }}</div>
-            <div class="stat-label">Payments stored</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-value">{{ account_count }}</div>
-            <div class="stat-label">Accounts seeded</div>
-          </div>
-        </div>
+    <div class="home-launcher-inner">
+      <h1 class="display-5 fw-bold mb-4">Accounting Automation System</h1>
+      <div class="d-grid gap-3 home-launcher-buttons">
+        <a class="btn btn-primary btn-lg home-launcher-btn" href="{{ url_for('expenses') }}">Expenses</a>
+        <a class="btn btn-outline-light btn-lg home-launcher-btn" href="{{ url_for('speed_point_control_recon') }}">Speed Point Control Recon</a>
       </div>
     </div>
   </div>

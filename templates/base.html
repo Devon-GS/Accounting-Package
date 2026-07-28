@@ -8,23 +8,25 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
-  <nav class="navbar navbar-expand-lg navbar-dark app-nav">
-    <div class="container">
-      <a class="navbar-brand fw-bold" href="{{ url_for('index') }}">Accounting Package</a>
-      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu">
-        <span class="navbar-toggler-icon"></span>
-      </button>
-      <div class="collapse navbar-collapse" id="navMenu">
-        <div class="navbar-nav ms-auto">
-          <a class="nav-link" href="{{ url_for('index') }}">Home</a>
-          <a class="nav-link" href="{{ url_for('cash_payments') }}">Cash Payments</a>
-          <a class="nav-link" href="{{ url_for('eft_payments') }}">EFT Payments</a>
-          <a class="nav-link" href="{{ url_for('accounts') }}">Accounts</a>
-          <a class="nav-link" href="{{ url_for('settings') }}">Settings</a>
+  {% if show_nav is not defined or show_nav %}
+    <nav class="navbar navbar-expand-lg navbar-dark app-nav">
+      <div class="container">
+        <a class="navbar-brand fw-bold" href="{{ url_for('index') }}">Accounting Package</a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navMenu">
+          <div class="navbar-nav ms-auto">
+            <a class="nav-link" href="{{ url_for('index') }}">Home</a>
+            <a class="nav-link" href="{{ url_for('cash_payments') }}">Cash Payments</a>
+            <a class="nav-link" href="{{ url_for('eft_payments') }}">EFT Payments</a>
+            <a class="nav-link" href="{{ url_for('accounts') }}">Accounts</a>
+            <a class="nav-link" href="{{ url_for('settings') }}">Settings</a>
+          </div>
         </div>
       </div>
-    </div>
-  </nav>
+    </nav>
+  {% endif %}
 
   <main class="container py-4 flex-grow-1">
     {% with messages = get_flashed_messages(with_categories=true) %}
