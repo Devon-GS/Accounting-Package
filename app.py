@@ -5,7 +5,8 @@ import os
 import re
 import sqlite3
 from contextlib import closing
-from datetime import datetime
+from datetime import date, datetime
+from io import StringIO
 from pathlib import Path
 from typing import Iterable
 
@@ -18,6 +19,7 @@ from flask import (
 	request,
 	url_for,
 )
+from ofxparse import OfxParser
 from openpyxl import load_workbook
 from werkzeug.utils import secure_filename
 
@@ -147,6 +149,7 @@ def initialize_storage() -> None:
 	INSTANCE_DIR.mkdir(exist_ok=True)
 	UPLOAD_DIR.mkdir(exist_ok=True)
 	with closing(sqlite3.connect(DB_PATH)) as conn:
+		conn.row_factory = sqlite3.Row
 		conn.execute("PRAGMA foreign_keys = ON")
 		conn.executescript(
 			"""
@@ -170,6 +173,7 @@ def initialize_storage() -> None:
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				source_folder TEXT,
+				source_type TEXT NOT NULL DEFAULT 'cash',
 				status TEXT NOT NULL DEFAULT 'open'
 			);
 
@@ -219,6 +223,12 @@ def initialize_storage() -> None:
 				FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE RESTRICT
 			);
 			"""
+		)
+		columns = {row["name"] for row in conn.execute("PRAGMA table_info(import_batches)")}
+		if "source_type" not in columns:
+			conn.execute("ALTER TABLE import_batches ADD COLUMN source_type TEXT NOT NULL DEFAULT 'cash'")
+		conn.execute(
+			"UPDATE import_batches SET source_type = 'cash' WHERE source_type IS NULL OR TRIM(source_type) = ''"
 		)
 		conn.commit()
 
@@ -398,6 +408,138 @@ def stage_workbook(
         raise
 
 
+def date_to_iso(value: object) -> str | None:
+	if value is None:
+		return None
+	if isinstance(value, datetime):
+		return value.date().isoformat()
+	if isinstance(value, date):
+		return value.isoformat()
+	if isinstance(value, str):
+		for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y%m%d", "%Y%m%d%H%M%S"):
+			try:
+				return datetime.strptime(value, fmt).date().isoformat()
+			except ValueError:
+				continue
+	return None
+
+
+def parse_ofx_transactions(file_path: Path) -> list[dict[str, object]]:
+	raw_text = file_path.read_text(encoding="latin-1")
+	raw_text = re.sub(r"CHARSET:NONE", "CHARSET:1252", raw_text, flags=re.IGNORECASE)
+	with StringIO(raw_text) as handle:
+		ofx = OfxParser.parse(handle)
+
+	transactions = []
+
+	account_list = getattr(ofx, "accounts", None) or []
+	if account_list:
+		for account in account_list:
+			statement = getattr(account, "statement", None)
+			if statement:
+				transactions.extend(getattr(statement, "transactions", []) or [])
+	else:
+		statement = getattr(ofx, "statement", None)
+		if statement:
+			transactions.extend(getattr(statement, "transactions", []) or [])
+
+	parsed = []
+	for index, txn in enumerate(transactions, start=1):
+		description = ""
+		for attr in ("payee", "memo", "name", "type"):
+			value = getattr(txn, attr, None)
+			if value:
+				description = str(value).strip()
+				break
+		amount = parse_money(getattr(txn, "amount", None))
+		payment_date = date_to_iso(getattr(txn, "date", None)) or date.today().isoformat()
+		if not description or amount is None:
+			continue
+		parsed.append(
+			{
+				"index": index,
+				"description": description,
+				"amount": amount,
+				"payment_date": payment_date,
+			}
+		)
+	return parsed
+
+
+def stage_ofx_file(
+	batch_id: int,
+	file_storage,
+	original_filename: str,
+) -> tuple[int | None, int, bool]:
+	source_path = Path(file_storage.filename)
+	safe_name = secure_filename(source_path.name) or "statement.ofx"
+	temp_path = UPLOAD_DIR / f"batch{batch_id}_{safe_name}"
+	file_storage.save(temp_path)
+
+	try:
+		file_hash = sha256_file(temp_path)
+		existing = query_one("SELECT id FROM import_files WHERE file_hash = ?", (file_hash,))
+		if existing:
+			temp_path.unlink(missing_ok=True)
+			return None, 0, True
+
+		transactions = parse_ofx_transactions(temp_path)
+		file_date = transactions[0]["payment_date"] if transactions else date.today().isoformat()
+
+		stored_name = f"{file_hash[:12]}_{safe_name}"
+		stored_path = UPLOAD_DIR / stored_name
+		temp_path.replace(stored_path)
+
+		cursor = execute(
+			"""
+			INSERT INTO import_files (batch_id, original_filename, stored_filename, file_hash, file_date)
+			VALUES (?, ?, ?, ?, ?)
+			""",
+			(batch_id, original_filename, stored_name, file_hash, file_date),
+		)
+		file_id = cursor.lastrowid
+		staged_rows = 0
+
+		for txn in transactions:
+			description = str(txn["description"]).strip()
+			amount = parse_money(txn["amount"])
+			payment_date = str(txn["payment_date"])
+			if not description or amount is None:
+				continue
+			account = resolve_account_for_supplier(description)
+			account_id = account["id"] if account is not None and "id" in account.keys() else None
+			if account is not None and "account_id" in account.keys():
+				account_id = account["account_id"]
+			execute(
+				"""
+				INSERT OR IGNORE INTO staged_payments (
+					batch_id, file_id, payment_date, supplier_name, supplier_key,
+					amount_paid, source_sheet, source_row, source_column, account_id
+				)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				""",
+				(
+					batch_id,
+					file_id,
+					payment_date,
+					description,
+					normalize_text(description),
+					amount,
+					"OFX",
+					int(txn["index"]),
+					1,
+					account_id,
+				),
+			)
+			staged_rows += 1
+
+		finalize_resolved_rows(batch_id)
+		return file_id, staged_rows, False
+	except Exception:
+		temp_path.unlink(missing_ok=True)
+		raise
+
+
 def finalize_resolved_rows(batch_id: int) -> int:
 	conn = get_connection()
 	cursor = conn.execute(
@@ -427,8 +569,14 @@ def finalize_resolved_rows(batch_id: int) -> int:
 	return cursor.rowcount if cursor.rowcount != -1 else 0
 
 
-def latest_batch_id() -> int | None:
-	row = query_one("SELECT id FROM import_batches ORDER BY id DESC LIMIT 1")
+def latest_batch_id(source_type: str | None = None) -> int | None:
+	if source_type:
+		row = query_one(
+			"SELECT id FROM import_batches WHERE source_type = ? ORDER BY id DESC LIMIT 1",
+			(source_type,),
+		)
+	else:
+		row = query_one("SELECT id FROM import_batches ORDER BY id DESC LIMIT 1")
 	return row["id"] if row else None
 
 
@@ -588,7 +736,7 @@ def index():
 
 @app.route("/cash-payments", methods=["GET"])
 def cash_payments():
-	batch_id = request.args.get("batch_id", type=int) or latest_batch_id()
+	batch_id = request.args.get("batch_id", type=int) or latest_batch_id("cash")
 	summary = batch_summary(batch_id) if batch_id else None
 	accounts = query_all("SELECT id, name FROM accounts ORDER BY name")
 	return render_template(
@@ -607,8 +755,8 @@ def upload_cash_payments():
         return redirect(url_for("cash_payments"))
 
     batch_id = execute(
-        "INSERT INTO import_batches (source_folder, status) VALUES (?, ?)",
-        (request.form.get("source_folder", ""), "open"),
+        "INSERT INTO import_batches (source_folder, source_type, status) VALUES (?, ?, ?)",
+        (request.form.get("source_folder", ""), "cash", "open"),
     ).lastrowid
 
     imported_files = 0
@@ -654,8 +802,68 @@ def upload_cash_payments():
     return redirect(url_for("cash_payments", batch_id=batch_id))
 
 
-@app.route("/cash-payments/resolve/<int:staged_id>", methods=["POST"])
-def resolve_cash_payment_item(staged_id: int):
+@app.route("/eft-payments", methods=["GET"])
+def eft_payments():
+	batch_id = request.args.get("batch_id", type=int) or latest_batch_id("eft")
+	summary = batch_summary(batch_id) if batch_id else None
+	accounts = query_all("SELECT id, name FROM accounts ORDER BY name")
+	return render_template(
+		"eft_payments.html",
+		batch_id=batch_id,
+		summary=summary,
+		accounts=accounts,
+	)
+
+
+@app.route("/eft-payments/upload", methods=["POST"])
+def upload_eft_payments():
+	files = request.files.getlist("files")
+	if not files:
+		flash("Please choose one or more OFX files.", "warning")
+		return redirect(url_for("eft_payments"))
+
+	batch_id = execute(
+		"INSERT INTO import_batches (source_folder, source_type, status) VALUES (?, ?, ?)",
+		(request.form.get("source_folder", ""), "eft", "open"),
+	).lastrowid
+
+	imported_files = 0
+	staged_rows = 0
+	duplicates = 0
+
+	for file_storage in files:
+		if not file_storage or not file_storage.filename:
+			continue
+		if Path(file_storage.filename).suffix.lower() != ".ofx":
+			flash(f"Skipped {file_storage.filename}: only .ofx files are supported.", "warning")
+			continue
+		file_id, staged_count, duplicate_flag = stage_ofx_file(
+			batch_id=batch_id,
+			file_storage=file_storage,
+			original_filename=Path(file_storage.filename).name,
+		)
+		if duplicate_flag:
+			duplicates += 1
+			continue
+		if file_id is not None:
+			imported_files += 1
+			staged_rows += staged_count
+
+	if imported_files == 0 and staged_rows == 0:
+		if duplicates:
+			flash(f"All {duplicates} uploaded file(s) were already imported.", "info")
+		else:
+			flash("No new OFX transactions were imported.", "info")
+	else:
+		message = f"Imported {imported_files} new file(s) and staged {staged_rows} transaction(s)."
+		if duplicates:
+			message += f" {duplicates} file(s) were already in the database."
+		flash(message, "success")
+
+	return redirect(url_for("eft_payments", batch_id=batch_id))
+
+
+def _resolve_payment_item(staged_id: int, redirect_endpoint: str):
 	staged = query_one(
 		"""
 		SELECT staged_payments.*, import_files.original_filename, import_files.file_date
@@ -671,7 +879,7 @@ def resolve_cash_payment_item(staged_id: int):
 
 	if staged["account_id"] is not None:
 		flash("That transaction is already resolved.", "info")
-		return redirect(url_for("cash_payments"))
+		return redirect(url_for(redirect_endpoint))
 
 	selected_account_id = request.form.get("account_id", type=int)
 	new_account_name = request.form.get("new_account_name", "").strip()
@@ -696,7 +904,7 @@ def resolve_cash_payment_item(staged_id: int):
 
 	if not account_id:
 		flash("Choose an existing account or type a new account name before saving.", "warning")
-		return redirect(url_for("cash_payments"))
+		return redirect(url_for(redirect_endpoint))
 
 	ensure_rule(staged["supplier_name"], account_id)
 	execute(
@@ -709,7 +917,17 @@ def resolve_cash_payment_item(staged_id: int):
 	)
 	finalize_resolved_rows(staged["batch_id"])
 	flash(f"Saved '{staged['supplier_name']}' to '{account_name}'.", "success")
-	return redirect(url_for("cash_payments"))
+	return redirect(url_for(redirect_endpoint))
+
+
+@app.route("/cash-payments/resolve/<int:staged_id>", methods=["POST"])
+def resolve_cash_payment_item(staged_id: int):
+	return _resolve_payment_item(staged_id, "cash_payments")
+
+
+@app.route("/eft-payments/resolve/<int:staged_id>", methods=["POST"])
+def resolve_eft_payment_item(staged_id: int):
+	return _resolve_payment_item(staged_id, "eft_payments")
 
 
 @app.route("/accounts", methods=["GET", "POST"])

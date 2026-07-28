@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% set title = "EFT Payments" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start flex-wrap gap-3 mb-4">
+  <div>
+    <h1 class="h2 fw-bold mb-1">EFT Payments</h1>
+    <p class="text-body-secondary mb-0">Upload bank statements in OFX format and the app will pull descriptions and amounts paid.</p>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-5">
+    <div class="card shadow-sm border-0 panel-card">
+      <div class="card-body p-4">
+        <h2 class="h5 fw-bold mb-3">Upload Folder</h2>
+        <form method="post" action="{{ url_for('upload_eft_payments') }}" enctype="multipart/form-data">
+          <label class="form-label">OFX bank statements</label>
+          <input class="form-control mb-2" type="file" name="files" multiple webkitdirectory directory accept=".ofx,.OFX">
+          <input class="form-control mb-3" type="file" name="files" multiple accept=".ofx,.OFX">
+          <div class="form-text mb-3">Select a folder of OFX bank statements or pick individual OFX files.</div>
+          <button type="submit" class="btn btn-primary">Import statement(s)</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-7">
+    {% if summary and summary.files %}
+    <div class="card shadow-sm border-0 panel-card latest-batch-card">
+      <div class="card-body p-4">
+        <h2 class="h5 fw-bold mb-3">Latest Batch</h2>
+        <div class="small text-body-secondary mb-2">Batch ID: {{ batch_id }}</div>
+        <div class="latest-batch-scroll">
+          <ul class="list-unstyled mb-0">
+            {% for file in summary.files %}
+              <li class="latest-batch-item">
+                <span class="fw-semibold">{{ file.original_filename }}</span>
+                <span class="text-body-secondary d-block small">Date: {{ file.file_date }}</span>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="row g-4 mt-1">
+  <div class="col-12">
+    <div class="card shadow-sm border-0 panel-card">
+      <div class="card-body p-4">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h2 class="h5 fw-bold mb-0">Unresolved Transactions</h2>
+          <span class="badge text-bg-dark">{{ summary.counts.unresolved_total if summary and summary.counts else 0 }} open</span>
+        </div>
+        {% if summary and summary.unresolved %}
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Description</th>
+                  <th class="text-end">Amount</th>
+                  <th>File</th>
+                  <th>Account</th>
+                  <th>New Account</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in summary.unresolved %}
+                  <tr>
+                    <td>{{ row.payment_date }}</td>
+                    <td class="fw-semibold">{{ row.supplier_name }}</td>
+                    <td class="text-end">{{ "%.2f"|format(row.amount_paid) }}</td>
+                    <td>{{ row.original_filename }}</td>
+                    <td style="min-width: 240px;">
+                      <select class="form-select form-select-sm" name="account_id" form="resolve-{{ row.staged_id }}">
+                        <option value="">Choose account</option>
+                        {% for account in accounts %}
+                          <option value="{{ account.id }}">{{ account.name }}</option>
+                        {% endfor %}
+                      </select>
+                    </td>
+                    <td style="min-width: 240px;">
+                      <input class="form-control form-control-sm" type="text" name="new_account_name" form="resolve-{{ row.staged_id }}" placeholder="New account name">
+                    </td>
+                    <td>
+                      <button class="btn btn-sm btn-primary" type="submit" form="resolve-{{ row.staged_id }}">Save</button>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="empty-state">
+            No unresolved transactions are waiting for account mapping.
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if summary and summary.unresolved %}
+  {% for row in summary.unresolved %}
+    <form id="resolve-{{ row.staged_id }}" method="post" action="{{ url_for('resolve_eft_payment_item', staged_id=row.staged_id) }}"></form>
+  {% endfor %}
+{% endif %}
+
+{% endblock %}
