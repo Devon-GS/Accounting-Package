@@ -17,6 +17,12 @@
         <form method="post">
           <label class="form-label">New account name</label>
           <input class="form-control mb-3" type="text" name="account_name" placeholder="Type an account name">
+          <label class="form-label">Source</label>
+          <select class="form-select mb-3" name="account_source">
+            {% for source_value, source_text in available_account_source_options %}
+              <option value="{{ source_value }}">{{ source_text }}</option>
+            {% endfor %}
+          </select>
           <button class="btn btn-primary" type="submit">Add account</button>
         </form>
       </div>

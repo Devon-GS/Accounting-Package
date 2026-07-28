@@ -638,6 +638,28 @@ def source_label(source_type: str | None) -> str:
 	return source_type.replace("_", " ").title()
 
 
+def available_account_source_options() -> list[tuple[str, str]]:
+	values = query_all(
+		"""
+		SELECT DISTINCT source_sheet AS source_name
+		FROM accounts
+		WHERE source_sheet IS NOT NULL AND TRIM(source_sheet) <> ''
+		ORDER BY source_name
+		"""
+	)
+	options = [("Manual", "Manual")]
+	for row in values:
+		source_name = row["source_name"]
+		if source_name and source_name != "Manual":
+			options.append((source_name, source_name))
+	if len(options) == 1:
+		options.extend([
+			("Cash Payments", "Cash Payments"),
+			("EFT Payments", "EFT Payments"),
+		])
+	return options
+
+
 def month_label(month_value: str) -> str:
 	return datetime.strptime(month_value, "%Y-%m").strftime("%B %Y")
 
@@ -777,7 +799,7 @@ def index():
 def cash_payments():
 	batch_id = request.args.get("batch_id", type=int) or latest_batch_id("cash")
 	summary = batch_summary(batch_id) if batch_id else None
-	accounts = query_all("SELECT id, name FROM accounts ORDER BY name")
+	accounts = query_all("SELECT id, name, source_sheet FROM accounts ORDER BY name")
 	return render_template(
 		"cash_payments.html",
 		batch_id=batch_id,
@@ -845,7 +867,7 @@ def upload_cash_payments():
 def eft_payments():
 	batch_id = request.args.get("batch_id", type=int) or latest_batch_id("eft")
 	summary = batch_summary(batch_id) if batch_id else None
-	accounts = query_all("SELECT id, name FROM accounts ORDER BY name")
+	accounts = query_all("SELECT id, name, source_sheet FROM accounts ORDER BY name")
 	return render_template(
 		"eft_payments.html",
 		batch_id=batch_id,
@@ -1034,13 +1056,15 @@ def account_transactions(account_id: int):
 def settings():
     if request.method == "POST":
         account_name = request.form.get("account_name", "").strip()
+        source_value = request.form.get("account_source", "Manual").strip()
         if account_name:
             existing = find_account_by_normalized_name(account_name)
             if existing:
                 flash(f"Account '{account_name}' already exists.", "info")
             else:
                 upper_name = canonical_account_name(account_name)
-                execute("INSERT INTO accounts (name) VALUES (?)", (upper_name,))
+                source_sheet = None if source_value == "Manual" else source_value
+                execute("INSERT INTO accounts (name, source_sheet) VALUES (?, ?)", (upper_name, source_sheet))
                 flash(f"Created account '{upper_name}'.", "success")
         return redirect(url_for("settings"))
 
@@ -1062,7 +1086,12 @@ def settings():
         ORDER BY supplier_rules.supplier_name
         """
     )
-    return render_template("settings.html", accounts=account_rows, rules=rules)
+    return render_template(
+        "settings.html",
+        accounts=account_rows,
+        rules=rules,
+        available_account_source_options=available_account_source_options(),
+    )
 
 
 if __name__ == "__main__":

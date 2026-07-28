@@ -79,7 +79,7 @@
                       <select class="form-select form-select-sm" name="account_id" form="resolve-{{ row.staged_id }}">
                         <option value="">Choose account</option>
                         {% for account in accounts %}
-                          <option value="{{ account.id }}">{{ account.name }}</option>
+                          <option value="{{ account.id }}">{{ account.name }} - {{ account.source_sheet or "Manual" }}</option>
                         {% endfor %}
                       </select>
                     </td>
