@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% set show_nav = False %}
+{% block content %}
+<nav class="navbar navbar-expand-lg navbar-dark speedpoint-nav shadow-sm mb-4">
+  <div class="container">
+    <a class="navbar-brand fw-bold" href="{{ url_for('speedpoint_uploads') }}">Speedpoint Recon</a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#speedpointNavMenu">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="speedpointNavMenu">
+      <div class="navbar-nav ms-auto">
+        <a class="nav-link" href="{{ url_for('index') }}">Home</a>
+		<a class="nav-link {% if active_page == 'uploads' %}active{% endif %}" href="{{ url_for('speedpoint_uploads') }}">Uploads</a>
+        <a class="nav-link {% if active_page == 'recon' %}active{% endif %}" href="{{ url_for('speed_point_control_recon') }}">Recon</a>
+      </div>
+    </div>
+  </div>
+</nav>
+
+{% block section_content %}{% endblock %}
+{% endblock %}

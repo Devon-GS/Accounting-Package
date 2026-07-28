@@ -1,0 +1,123 @@
+{% extends "speedpoint_layout.html" %}
+{% set title = "Uploads" %}
+{% block section_content %}
+<div class="d-flex justify-content-between align-items-start flex-wrap gap-3 mb-4">
+  <div>
+    <!-- <p class="eyebrow mb-2">Speedpoint Recon</p> -->
+    <h1 class="h2 fw-bold mb-1">Uploads</h1>
+    <p class="text-body-secondary mb-0">
+      Upload one Speedpoints workbook and one or more Bank Statements workbooks to reconcile matching batches.
+    </p>
+  </div>
+</div>
+
+<form method="post" enctype="multipart/form-data" class="row g-4">
+  <div class="col-lg-5">
+    <section class="card shadow-sm border-0 panel-card h-100">
+      <div class="card-body p-4">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h2 class="h5 fw-bold mb-0">Speedpoints</h2>
+          <span class="badge text-bg-dark">Single .xlsx</span>
+        </div>
+        <p class="text-body-secondary small mb-3">
+          Upload the Speedpoints workbook that contains the terminal columns for 946389 and 946390.
+        </p>
+        <label class="form-label">Speedpoints workbook</label>
+        <input class="form-control" type="file" name="speedpoint_file" accept=".xlsx">
+        <div class="form-text mt-2">Choose one `.xlsx` file only.</div>
+      </div>
+    </section>
+  </div>
+
+  <div class="col-lg-7">
+    <section class="card shadow-sm border-0 panel-card h-100">
+      <div class="card-body p-4">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h2 class="h5 fw-bold mb-0">Bank Statements</h2>
+          <span class="badge text-bg-dark">Multiple .xlsx</span>
+        </div>
+        <p class="text-body-secondary small mb-3">
+          Only the `Date`, `Transactions`, and `Credit` columns are used from these files.
+        </p>
+        <label class="form-label">Bank statement workbooks</label>
+        <input class="form-control" type="file" name="bank_files" accept=".xlsx" multiple>
+        <div class="form-text mt-2">Choose one or more `.xlsx` files.</div>
+      </div>
+    </section>
+  </div>
+
+  <div class="col-12">
+    <button type="submit" class="btn btn-primary btn-lg">Process files</button>
+  </div>
+</form>
+
+{% if results %}
+  <div class="row g-4 mt-1">
+    <div class="col-12">
+      <section class="card shadow-sm border-0 panel-card">
+        <div class="card-body p-4">
+          <div class="d-flex justify-content-between align-items-start flex-wrap gap-3 mb-3">
+            <div>
+              <h2 class="h5 fw-bold mb-1">Reconciliation Complete</h2>
+              <p class="text-body-secondary mb-0">
+                Matched {{ results.matched_count }} transaction{{ '' if results.matched_count == 1 else 's' }} and found {{ results.unresolved_count }} unresolved item{{ '' if results.unresolved_count == 1 else 's' }}.
+              </p>
+            </div>
+            {% if download_url %}
+              <a id="speedpoint-download-link" class="btn btn-primary" href="{{ download_url }}">Download edited files</a>
+            {% endif %}
+          </div>
+
+          {% if results.unresolved_rows %}
+            <div class="table-responsive">
+              <table class="table table-sm align-middle">
+                <thead>
+                  <tr>
+                    <th>File</th>
+                    <th>Row</th>
+                    <th>Transaction</th>
+                    <th class="text-end">Credit</th>
+                    <th>Terminal</th>
+                    <th>Batch</th>
+                    <th>Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in results.unresolved_rows %}
+                    <tr>
+                      <td>{{ row.file_name }}</td>
+                      <td>{{ row.row_number }}</td>
+                      <td class="fw-semibold">{{ row.transaction }}</td>
+                      <td class="text-end">{{ "%.2f"|format(row.credit) }}</td>
+                      <td>{{ row.terminal }}</td>
+                      <td>{{ row.batch_number }}</td>
+                      <td>{{ row.reason }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="empty-state">
+              No unresolved transactions were found.
+            </div>
+          {% endif %}
+        </div>
+      </section>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+  {% if download_url %}
+    <script>
+      window.addEventListener("load", () => {
+        const link = document.getElementById("speedpoint-download-link");
+        if (link) {
+          link.click();
+        }
+      });
+    </script>
+  {% endif %}
+{% endblock %}

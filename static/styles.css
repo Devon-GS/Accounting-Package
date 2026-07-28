@@ -21,6 +21,23 @@ body {
   box-shadow: 0 10px 30px rgba(7, 19, 31, 0.25);
 }
 
+.speedpoint-nav {
+  background: linear-gradient(90deg, #12263a, #1b3d58 52%, #123248);
+  border-radius: 1.25rem;
+  box-shadow: 0 14px 30px rgba(8, 19, 31, 0.18);
+}
+
+.speedpoint-nav .nav-link,
+.speedpoint-nav .navbar-brand {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.speedpoint-nav .nav-link:hover,
+.speedpoint-nav .nav-link:focus,
+.speedpoint-nav .nav-link.active {
+  color: #f4b942;
+}
+
 .hero {
   overflow: hidden;
   color: white;

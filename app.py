@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import sqlite3
+import zipfile
 from contextlib import closing
 from datetime import date, datetime
 from io import StringIO
 from pathlib import Path
 from typing import Iterable
+from uuid import uuid4
 
 from flask import (
 	Flask,
@@ -16,23 +19,29 @@ from flask import (
 	g,
 	redirect,
 	render_template,
+	send_file,
 	request,
 	url_for,
 )
 from ofxparse import OfxParser
 from openpyxl import load_workbook
+from openpyxl.styles import PatternFill
 from werkzeug.utils import secure_filename
 
 
 BASE_DIR = Path(__file__).resolve().parent
 INSTANCE_DIR = BASE_DIR / "instance"
 UPLOAD_DIR = INSTANCE_DIR / "uploads"
+SPEEDPOINT_RUNS_DIR = UPLOAD_DIR / "speedpoint_runs"
 DB_PATH = INSTANCE_DIR / "accounting.db"
 ACCOUNT_NAMES_PATH = BASE_DIR / "Account Names.xlsx"
 
 SUPPORTED_EXTENSIONS = {".xlsx", ".xlsm"}
+SPEEDPOINT_UPLOAD_EXTENSIONS = {".xlsx"}
 PAYMENT_COLUMNS = (2, 4)
 PAYMENT_RANGE = range(18, 34)
+SPEEDPOINT_HIGHLIGHT = PatternFill(fill_type="solid", fgColor="FF86B9")
+BANK_HIGHLIGHT = PatternFill(fill_type="solid", fgColor="FFFF00")
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-accounting-secret")
@@ -148,6 +157,7 @@ def execute(sql: str, params: tuple = ()) -> sqlite3.Cursor:
 def initialize_storage() -> None:
 	INSTANCE_DIR.mkdir(exist_ok=True)
 	UPLOAD_DIR.mkdir(exist_ok=True)
+	SPEEDPOINT_RUNS_DIR.mkdir(exist_ok=True)
 	with closing(sqlite3.connect(DB_PATH)) as conn:
 		conn.row_factory = sqlite3.Row
 		conn.execute("PRAGMA foreign_keys = ON")
@@ -328,6 +338,241 @@ def pick_payment_sheet(workbook):
 		if normalize_text(worksheet.title) == "CASH UP":
 			return worksheet
 	return workbook.worksheets[0]
+
+
+def compact_text(value: object) -> str:
+	return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def normalize_bank_transaction(value: object) -> str:
+	return compact_text(value).upper()
+
+
+def parse_speedpoint_bank_transaction(transaction: object) -> dict[str, object] | None:
+	text = normalize_bank_transaction(transaction)
+	if not text:
+		return None
+
+	speedpoint_match = re.match(r"^SPEEDPOINT\s*(?P<terminal>\d+)\s+(?P<batch>\d+)$", text, flags=re.IGNORECASE)
+	if speedpoint_match:
+		return {
+			"transaction_type": "SPEEDPOINT",
+			"bank_terminal": speedpoint_match.group("terminal"),
+			"batch_number": int(speedpoint_match.group("batch")),
+			"speedpoint_terminal": 946389,
+			"speedpoint_column": 2,
+			"amount_column": 3,
+		}
+
+	nedlnk_match = re.match(r"^NEDLNK\s+DP\s+(?P<terminal>\d+)\s+(?P<batch>\d+)$", text, flags=re.IGNORECASE)
+	if nedlnk_match:
+		return {
+			"transaction_type": "NEDLNK DP",
+			"bank_terminal": nedlnk_match.group("terminal"),
+			"batch_number": int(nedlnk_match.group("batch")),
+			"speedpoint_terminal": 946390,
+			"speedpoint_column": 4,
+			"amount_column": 5,
+		}
+
+	return None
+
+
+def pick_bank_statement_sheet(workbook):
+	for worksheet in workbook.worksheets:
+		for row_number in range(1, min(worksheet.max_row, 5) + 1):
+			values = [normalize_text(worksheet.cell(row_number, column).value) for column in (1, 2, 4)]
+			if values == ["DATE", "TRANSACTIONS", "CREDIT"]:
+				return worksheet
+	return workbook.worksheets[0]
+
+
+def pick_speedpoint_sheet(workbook):
+	for worksheet in workbook.worksheets:
+		if normalize_text(worksheet.title) in {"SPEED POINTS", "SPEEDPOINT", "SPEEDPOINTS"}:
+			return worksheet
+	return workbook.worksheets[0]
+
+
+def parse_amount(value: object) -> float | None:
+	number = parse_money(value)
+	if number is None:
+		return None
+	return round(number, 2)
+
+
+def find_speedpoint_match(
+	worksheet,
+	terminal_column: int,
+	batch_number: int,
+	expected_amount: float,
+) -> tuple[int | None, float | None, bool]:
+	candidate_row: int | None = None
+	candidate_amount: float | None = None
+	for row_number in range(1, worksheet.max_row + 1):
+		batch_value = worksheet.cell(row=row_number, column=terminal_column).value
+		if batch_value in (None, ""):
+			continue
+		try:
+			current_batch = int(float(str(batch_value).strip()))
+		except (TypeError, ValueError):
+			continue
+		if current_batch != batch_number:
+			continue
+
+		amount_value = parse_amount(worksheet.cell(row=row_number, column=terminal_column + 1).value)
+		if amount_value == expected_amount:
+			return row_number, amount_value, True
+		if candidate_row is None:
+			candidate_row = row_number
+			candidate_amount = amount_value
+	return candidate_row, candidate_amount, False
+
+
+def highlight_speedpoint_match(worksheet, row_number: int, terminal_column: int) -> None:
+	worksheet.cell(row=row_number, column=terminal_column + 1).fill = SPEEDPOINT_HIGHLIGHT
+
+
+def highlight_bank_match(worksheet, row_number: int, credit_column: int) -> None:
+	worksheet.cell(row=row_number, column=credit_column).fill = BANK_HIGHLIGHT
+
+
+def build_speedpoint_result_dir(run_id: str) -> Path:
+	run_dir = SPEEDPOINT_RUNS_DIR / run_id
+	run_dir.mkdir(parents=True, exist_ok=True)
+	return run_dir
+
+
+def build_result_zip(run_dir: Path, manifest: dict[str, object]) -> Path:
+	zip_path = run_dir / manifest["zip_filename"]
+	with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+		for item in manifest["edited_files"]:
+			file_path = run_dir / item["stored_name"]
+			archive.write(file_path, arcname=item["download_name"])
+	return zip_path
+
+
+def process_speedpoint_reconciliation(speedpoint_storage, bank_storages: list) -> dict[str, object]:
+	run_id = uuid4().hex
+	run_dir = build_speedpoint_result_dir(run_id)
+
+	speedpoint_original_name = Path(speedpoint_storage.filename).name
+	speedpoint_safe_name = secure_filename(speedpoint_original_name) or "speedpoint.xlsx"
+	speedpoint_input_path = run_dir / f"input_{speedpoint_safe_name}"
+	speedpoint_storage.save(speedpoint_input_path)
+
+	speedpoint_workbook = load_workbook(speedpoint_input_path)
+	speedpoint_sheet = pick_speedpoint_sheet(speedpoint_workbook)
+
+	unresolved_rows: list[dict[str, object]] = []
+	total_matches = 0
+	edited_files: list[dict[str, str]] = []
+
+	for index, bank_storage in enumerate(bank_storages, start=1):
+		bank_original_name = Path(bank_storage.filename).name
+		bank_safe_name = secure_filename(bank_original_name) or f"bank_statement_{index}.xlsx"
+		bank_input_path = run_dir / f"input_{index:02d}_{bank_safe_name}"
+		bank_storage.save(bank_input_path)
+
+		bank_workbook = load_workbook(bank_input_path)
+		bank_sheet = pick_bank_statement_sheet(bank_workbook)
+		header_row = 2
+
+		for row_number in range(1, min(bank_sheet.max_row, 10) + 1):
+			row_values = [normalize_text(bank_sheet.cell(row_number, column).value) for column in range(1, 6)]
+			if "DATE" in row_values and "TRANSACTIONS" in row_values and "CREDIT" in row_values:
+				header_row = row_number
+				break
+
+		for row_number in range(header_row + 1, bank_sheet.max_row + 1):
+			transaction_cell = bank_sheet.cell(row=row_number, column=2)
+			credit_cell = bank_sheet.cell(row=row_number, column=4)
+			transaction_info = parse_speedpoint_bank_transaction(transaction_cell.value)
+			credit_amount = parse_amount(credit_cell.value)
+			if not transaction_info or credit_amount is None:
+				continue
+
+			terminal_column = int(transaction_info["speedpoint_column"])
+			expected_amount = float(credit_amount)
+			match_row, match_amount, exact_match = find_speedpoint_match(
+				speedpoint_sheet,
+				terminal_column,
+				int(transaction_info["batch_number"]),
+				expected_amount,
+			)
+			if exact_match and match_row is not None:
+				highlight_speedpoint_match(speedpoint_sheet, match_row, terminal_column)
+				highlight_bank_match(bank_sheet, row_number, 4)
+				total_matches += 1
+				continue
+
+			reason = "Batch not found"
+			if match_row is not None:
+				reason = "Amount mismatch"
+			unresolved_rows.append(
+				{
+					"file_name": bank_original_name,
+					"sheet_name": bank_sheet.title,
+					"row_number": row_number,
+					"transaction": compact_text(transaction_cell.value),
+					"credit": expected_amount,
+					"terminal": transaction_info["speedpoint_terminal"],
+					"bank_terminal": transaction_info["bank_terminal"],
+					"batch_number": transaction_info["batch_number"],
+					"reason": reason,
+					"matched_row": match_row,
+					"matched_amount": match_amount,
+				}
+			)
+
+		bank_output_name = f"edited_{index:02d}_{bank_safe_name}"
+		bank_output_path = run_dir / bank_output_name
+		bank_workbook.save(bank_output_path)
+		bank_download_name = bank_safe_name if bank_safe_name.lower().endswith(".xlsx") else f"{bank_safe_name}.xlsx"
+		edited_files.append(
+			{
+				"download_name": f"{index:02d}_{bank_download_name}",
+				"stored_name": bank_output_name,
+				"kind": "bank",
+			}
+		)
+
+	speedpoint_output_name = f"edited_{speedpoint_safe_name}"
+	speedpoint_output_path = run_dir / speedpoint_output_name
+	speedpoint_workbook.save(speedpoint_output_path)
+	edited_files.insert(
+		0,
+		{
+			"download_name": f"speedpoint_{speedpoint_safe_name}",
+			"stored_name": speedpoint_output_name,
+			"kind": "speedpoint",
+		},
+	)
+
+	manifest = {
+		"run_id": run_id,
+		"speedpoint_original_name": speedpoint_original_name,
+		"speedpoint_download_name": speedpoint_safe_name,
+		"bank_count": len(bank_storages),
+		"matched_count": total_matches,
+		"unresolved_count": len(unresolved_rows),
+		"unresolved_rows": unresolved_rows,
+		"edited_files": edited_files,
+		"zip_filename": f"speedpoint_reconciliation_{run_id[:8]}.zip",
+	}
+	manifest_path = run_dir / "manifest.json"
+	manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+	zip_path = build_result_zip(run_dir, manifest)
+	manifest["zip_path"] = zip_path.name
+	manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+	return manifest
+
+
+def load_speedpoint_manifest(run_id: str) -> dict[str, object] | None:
+	manifest_path = SPEEDPOINT_RUNS_DIR / run_id / "manifest.json"
+	if not manifest_path.exists():
+		return None
+	return json.loads(manifest_path.read_text(encoding="utf-8"))
 
 
 def stage_workbook(
@@ -799,7 +1044,74 @@ def expenses():
 
 @app.route("/speed-point-control-recon")
 def speed_point_control_recon():
-	return render_template("speed_point_control_recon.html", title="Speed Point Control Recon")
+	return render_template(
+		"speed_point_control_recon.html",
+		title="Speed Point Control Recon",
+		active_page="recon",
+		show_nav=False,
+	)
+
+
+@app.route("/speed-point-control-recon/uploads", methods=["GET", "POST"])
+def speedpoint_uploads():
+	if request.method == "POST":
+		speedpoint_file = request.files.get("speedpoint_file")
+		bank_files = [file_storage for file_storage in request.files.getlist("bank_files") if file_storage and file_storage.filename]
+
+		if not speedpoint_file or not speedpoint_file.filename:
+			flash("Please choose one Speedpoints .xlsx file.", "warning")
+			return redirect(url_for("speedpoint_uploads"))
+
+		if Path(speedpoint_file.filename).suffix.lower() not in SPEEDPOINT_UPLOAD_EXTENSIONS:
+			flash("The Speedpoints file must be a .xlsx workbook.", "warning")
+			return redirect(url_for("speedpoint_uploads"))
+
+		if not bank_files:
+			flash("Please choose at least one Bank Statements .xlsx file.", "warning")
+			return redirect(url_for("speedpoint_uploads"))
+
+		for bank_file in bank_files:
+			if Path(bank_file.filename).suffix.lower() not in SPEEDPOINT_UPLOAD_EXTENSIONS:
+				flash("All Bank Statements files must be .xlsx workbooks.", "warning")
+				return redirect(url_for("speedpoint_uploads"))
+
+		manifest = process_speedpoint_reconciliation(speedpoint_file, bank_files)
+		return redirect(url_for("speedpoint_uploads", run_id=manifest["run_id"]))
+
+	run_id = request.args.get("run_id", type=str)
+	results = load_speedpoint_manifest(run_id) if run_id else None
+	if run_id and not results:
+		flash("That reconciliation result is no longer available.", "warning")
+		return redirect(url_for("speedpoint_uploads"))
+
+	return render_template(
+		"speedpoint_uploads.html",
+		title="Uploads",
+		active_page="uploads",
+		show_nav=False,
+		run_id=run_id,
+		results=results,
+		download_url=url_for("speedpoint_download", run_id=run_id) if run_id else None,
+	)
+
+
+@app.route("/speed-point-control-recon/uploads/download/<run_id>")
+def speedpoint_download(run_id: str):
+	manifest = load_speedpoint_manifest(run_id)
+	if not manifest:
+		flash("The edited files are no longer available.", "warning")
+		return redirect(url_for("speedpoint_uploads"))
+
+	zip_path = SPEEDPOINT_RUNS_DIR / run_id / manifest["zip_filename"]
+	if not zip_path.exists():
+		flash("The download bundle could not be found.", "warning")
+		return redirect(url_for("speedpoint_uploads", run_id=run_id))
+
+	return send_file(
+		zip_path,
+		as_attachment=True,
+		download_name=manifest["zip_filename"],
+	)
 
 
 @app.route("/cash-payments", methods=["GET"])
