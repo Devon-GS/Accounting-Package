@@ -29,11 +29,12 @@ services:
     depends_on:
       db-primary:
         condition: service_healthy
+    entrypoint: ["/bin/sh", "/usr/local/bin/replica-wrapper.sh"]
     volumes:
       - postgres_replica_data:/var/lib/postgresql/data
-      - ./docker/replica-init.sh:/docker-entrypoint-initdb.d/01-replica-init.sh:ro
+      - ./docker/replica-wrapper.sh:/usr/local/bin/replica-wrapper.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      test: ["CMD-SHELL", "pg_isready -U accounting -d accounting"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -47,6 +48,7 @@ services:
       DATABASE_URL: postgresql://accounting:${DB_PASSWORD}@db-primary:5432/accounting
       SECRET_KEY: ${APP_SECRET_KEY}
       PORT: 5000
+      # GUNICORN_CMD_ARGS: "--workers 4 --threads 2"
     depends_on:
       db-primary:
         condition: service_healthy
