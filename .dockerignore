@@ -9,7 +9,6 @@ env/
 .git/
 .gitignore
 instance/
-*.xlsx
 *.xlsm
 *.ofx
 *.db

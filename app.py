@@ -259,7 +259,7 @@ def sqlite_schema_statements() -> list[str]:
 			name TEXT NOT NULL UNIQUE,
 			source_sheet TEXT,
 			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)
+		);
 		""",
 		"""
 		CREATE TABLE IF NOT EXISTS supplier_rules (
@@ -269,7 +269,7 @@ def sqlite_schema_statements() -> list[str]:
 			account_id INTEGER NOT NULL,
 			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE
-		)
+		);
 		""",
 		"""
 		CREATE TABLE IF NOT EXISTS import_batches (
@@ -278,7 +278,7 @@ def sqlite_schema_statements() -> list[str]:
 			source_folder TEXT,
 			source_type TEXT NOT NULL DEFAULT 'cash',
 			status TEXT NOT NULL DEFAULT 'open'
-		)
+		);
 		""",
 		"""
 		CREATE TABLE IF NOT EXISTS import_files (
@@ -290,7 +290,7 @@ def sqlite_schema_statements() -> list[str]:
 			file_date TEXT NOT NULL,
 			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (batch_id) REFERENCES import_batches (id) ON DELETE CASCADE
-		)
+		);
 		""",
 		"""
 		CREATE TABLE IF NOT EXISTS staged_payments (
@@ -310,7 +310,7 @@ def sqlite_schema_statements() -> list[str]:
 			FOREIGN KEY (batch_id) REFERENCES import_batches (id) ON DELETE CASCADE,
 			FOREIGN KEY (file_id) REFERENCES import_files (id) ON DELETE CASCADE,
 			FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE SET NULL
-		)
+		);
 		""",
 		"""
 		CREATE TABLE IF NOT EXISTS payments (
@@ -327,7 +327,7 @@ def sqlite_schema_statements() -> list[str]:
 			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE (source_file_hash, source_sheet, source_row, source_column),
 			FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE RESTRICT
-		)
+		);
 		""",
 	]
 
@@ -1253,6 +1253,13 @@ def account_transactions_for_month(month_value: str, account_id: int, source_typ
 		""",
 		tuple(params),
 	)
+
+
+def bootstrap_storage() -> None:
+	with app.app_context():
+		initialize_storage()
+		sync_account_names()
+		app._seeded_accounts = True
 
 
 @app.before_request
