@@ -7,6 +7,8 @@ services:
       POSTGRES_USER: accounting
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
+    ports:
+      - "5432:5432"
     entrypoint: ["/bin/sh", "/usr/local/bin/primary-wrapper.sh"]
     volumes:
       - postgres_primary_data:/var/lib/postgresql/data

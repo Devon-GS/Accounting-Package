@@ -93,6 +93,65 @@ def normalize_text(value: object) -> str:
 	return re.sub(r"[^A-Z0-9]+", " ", text).strip()
 
 
+def normalize_tokens(value: object) -> list[str]:
+	text = normalize_text(value)
+	if not text:
+		return []
+	return text.split()
+
+
+def significant_tokens(value: object) -> list[str]:
+	stop_words = {
+		"AND",
+		"FOR",
+		"FROM",
+		"IN",
+		"OF",
+		"ON",
+		"OR",
+		"THE",
+		"TO",
+		"WITH",
+		"ACCOUNT",
+		"ACCOUNTS",
+		"CASH",
+		"PAYMENT",
+		"PAYMENTS",
+		"SERVICE",
+		"SERVICES",
+		"TRANSFER",
+		"TRANSACTIONS",
+		"WAGES",
+	}
+	return [
+		token
+		for token in normalize_tokens(value)
+		if len(token) >= 4 and token not in stop_words
+	]
+
+
+def account_match_score(account_name: object, description_tokens: set[str]) -> int:
+	account_tokens = significant_tokens(account_name)
+	if not account_tokens or not description_tokens:
+		return 0
+
+	matched_tokens = [token for token in account_tokens if token in description_tokens]
+	if not matched_tokens:
+		return 0
+
+	if len(account_tokens) == 1:
+		token = matched_tokens[0]
+		return 5 if len(token) >= 4 else 0
+
+	if len(matched_tokens) >= 2:
+		return len(matched_tokens) * 4 + len(account_tokens)
+
+	token = matched_tokens[0]
+	if len(token) >= 7:
+		return 4
+	return 0
+
+
 def parse_money(value: object) -> float | None:
 	if value in (None, ""):
 		return None
@@ -488,6 +547,17 @@ def resolve_account_for_supplier(supplier_name: str) -> sqlite3.Row | None:
 	if rule:
 		return rule
 
+	description_tokens = set(normalize_tokens(supplier_name))
+	best_account = None
+	best_score = 0
+	for account in query_all("SELECT id, name FROM accounts"):
+		score = account_match_score(account["name"], description_tokens)
+		if score > best_score:
+			best_score = score
+			best_account = account
+	if best_account and best_score > 0:
+		return best_account
+
 	exact = find_account_by_normalized_name(supplier_name)
 	if exact:
 		ensure_rule(supplier_name, exact["id"])
@@ -860,6 +930,32 @@ def stage_workbook(
             for column_number in PAYMENT_COLUMNS:
                 amount = parse_money(worksheet.cell(row=row_number, column=column_number).value)
                 if amount is None:
+                    continue
+                duplicate_row = query_one(
+                    """
+                    SELECT 1
+                    FROM payments
+                    WHERE payment_date = ?
+                      AND supplier_name = ?
+                      AND amount_paid = ?
+                    UNION
+                    SELECT 1
+                    FROM staged_payments
+                    WHERE payment_date = ?
+                      AND supplier_name = ?
+                      AND amount_paid = ?
+                    LIMIT 1
+                    """,
+                    (
+                        file_date,
+                        supplier_name,
+                        amount,
+                        file_date,
+                        supplier_name,
+                        amount,
+                    ),
+                )
+                if duplicate_row:
                     continue
                 account = resolve_account_for_supplier(supplier_name)
                 account_id = account["account_id"] if account and "account_id" in account.keys() else None
