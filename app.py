@@ -100,6 +100,10 @@ def normalize_tokens(value: object) -> list[str]:
 	return text.split()
 
 
+def matchable_tokens(value: object) -> list[str]:
+	return [token for token in normalize_tokens(value) if not token.isdigit()]
+
+
 def significant_tokens(value: object) -> list[str]:
 	stop_words = {
 		"AND",
@@ -131,8 +135,16 @@ def significant_tokens(value: object) -> list[str]:
 
 
 def account_match_score(account_name: object, description_tokens: set[str]) -> int:
+	account_all_tokens = matchable_tokens(account_name)
+	if not account_all_tokens or not description_tokens:
+		return 0
+
+	matched_all_tokens = [token for token in account_all_tokens if token in description_tokens]
+	if len(matched_all_tokens) >= 2:
+		return len(matched_all_tokens) * 4 + len(account_all_tokens)
+
 	account_tokens = significant_tokens(account_name)
-	if not account_tokens or not description_tokens:
+	if not account_tokens:
 		return 0
 
 	matched_tokens = [token for token in account_tokens if token in description_tokens]
@@ -142,9 +154,6 @@ def account_match_score(account_name: object, description_tokens: set[str]) -> i
 	if len(account_tokens) == 1:
 		token = matched_tokens[0]
 		return 5 if len(token) >= 4 else 0
-
-	if len(matched_tokens) >= 2:
-		return len(matched_tokens) * 4 + len(account_tokens)
 
 	token = matched_tokens[0]
 	if len(token) >= 7:
@@ -547,7 +556,7 @@ def resolve_account_for_supplier(supplier_name: str) -> sqlite3.Row | None:
 	if rule:
 		return rule
 
-	description_tokens = set(normalize_tokens(supplier_name))
+	description_tokens = set(matchable_tokens(supplier_name))
 	best_account = None
 	best_score = 0
 	for account in query_all("SELECT id, name FROM accounts"):
