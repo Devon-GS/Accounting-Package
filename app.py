@@ -61,6 +61,12 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-accounting-secret")
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 
+app_name = os.environ.get('APP_NAME', 'Company Name')
+
+@app.context_processor
+def inject_global_vars():
+    return dict(app_name=app_name)
+
 
 class QueryResult:
 	def __init__(self, cursor, lastrowid: int | None = None):
