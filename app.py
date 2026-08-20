@@ -1401,6 +1401,11 @@ def expenses():
 	return render_template("expenses.html", title="Expenses")
 
 
+@app.route("/reports")
+def reports():
+	return render_template("reports.html", title="Reports")
+
+
 @app.route("/speed-point-control-recon/uploads", methods=["GET", "POST"])
 def speedpoint_uploads():
 	if request.method == "POST":
