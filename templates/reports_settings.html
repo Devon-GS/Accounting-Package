@@ -47,7 +47,7 @@
                           id="report-{{ description_key }}-{{ account.id }}"
                           {% if account.id in selected_account_ids_by_description.get(description_key, []) %}checked{% endif %}
                         >
-                        <label class="form-check-label" for="report-{{ description_key }}-{{ account.id }}">
+                        <label class="form-check-label report-account-label" for="report-{{ description_key }}-{{ account.id }}">
                           {{ account.name }}
                         </label>
                       </div>
@@ -65,4 +65,19 @@
     </div>
   </div>
 </div>
+<script>
+  document.querySelectorAll('.report-account-label').forEach((label) => {
+    const checkbox = document.getElementById(label.getAttribute('for'));
+    if (!checkbox) {
+      return;
+    }
+
+    const syncLabelState = () => {
+      label.classList.toggle('text-secondary', !checkbox.checked);
+    };
+
+    checkbox.addEventListener('change', syncLabelState);
+    syncLabelState();
+  });
+</script>
 {% endblock %}
