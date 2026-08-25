@@ -7,7 +7,7 @@
     <div class="navbar-nav">
       <a class="nav-link" href="{{ url_for('index') }}">Home</a>
       <a class="nav-link active" href="{{ url_for('reports') }}">Reports</a>
-      <a class="nav-link" href="{{ url_for('settings') }}">Settings</a>
+      <a class="nav-link" href="{{ url_for('reports_settings') }}">Settings</a>
     </div>
   </div>
 </nav>
@@ -43,23 +43,12 @@
           </tr>
         </thead>
         <tbody>
-          <tr><td>Shop cost of sale Bank eft</td><td class="text-end"></td></tr>
-          <tr><td>Shop cost of sale payout from till</td><td class="text-end"></td></tr>
-          <tr><td>Cost of sale fuel</td><td class="text-end"></td></tr>
-          <tr><td>General expenses</td><td class="text-end"></td></tr>
-          <tr><td>Accountant fee</td><td class="text-end"></td></tr>
-          <tr><td>Bank chargers</td><td class="text-end"></td></tr>
-          <tr><td>Insurance&#x20;</td><td class="text-end"></td></tr>
-          <tr><td>Salaries and wages</td><td class="text-end"></td></tr>
-          <tr><td>Staff Fuel</td><td class="text-end"></td></tr>
-          <tr><td>Staff training,uniform &amp; Entertainment</td><td class="text-end"></td></tr>
-          <tr><td>SARS- PAYE UIF</td><td class="text-end"></td></tr>
-          <tr><td>Mibco</td><td class="text-end"></td></tr>
-          <tr><td>RMA Workmans compensation</td><td class="text-end"></td></tr>
-          <tr><td>Rent</td><td class="text-end"></td></tr>
-          <tr><td>Water</td><td class="text-end"></td></tr>
-          <tr><td>Electricity</td><td class="text-end"></td></tr>
-          <tr><td>Telephone MTN &amp; VODACOM</td><td class="text-end"></td></tr>
+          {% for row in report_rows %}
+            <tr>
+              <td>{{ row.label }}</td>
+              <td class="text-end">R{{ "%.2f"|format(row.amount or 0) }}</td>
+            </tr>
+          {% endfor %}
         </tbody>
       </table>
     </div>
