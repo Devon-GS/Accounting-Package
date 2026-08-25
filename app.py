@@ -1403,7 +1403,12 @@ def expenses():
 
 @app.route("/reports")
 def reports():
-	return render_template("reports.html", title="Reports")
+	month_value = normalize_month(request.args.get("month")) or latest_payment_month()
+	return render_template(
+		"reports.html",
+		title="Reports",
+		month_value=month_value,
+	)
 
 
 @app.route("/speed-point-control-recon/uploads", methods=["GET", "POST"])

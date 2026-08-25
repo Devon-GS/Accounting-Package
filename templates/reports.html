@@ -1,9 +1,68 @@
 {% extends "base.html" %}
 {% set title = "Reports" %}
+{% set show_nav = false %}
 {% block content %}
-<section class="card border-0 shadow-sm">
-  <div class="card-body p-4">
-    <h1 class="h3 mb-0">Reports</h1>
+<nav class="navbar navbar-expand-lg navbar-dark app-nav mb-4">
+  <div class="container">
+    <div class="navbar-nav">
+      <a class="nav-link" href="{{ url_for('index') }}">Home</a>
+      <a class="nav-link active" href="{{ url_for('reports') }}">Reports</a>
+      <a class="nav-link" href="{{ url_for('settings') }}">Settings</a>
+    </div>
   </div>
-</section>
+</nav>
+
+<div class="d-flex justify-content-between align-items-start flex-wrap gap-3 mb-4">
+  <div>
+    <h1 class="h2 fw-bold mb-1">Reports</h1>
+  </div>
+</div>
+
+<div class="card shadow-sm border-0 panel-card mb-4">
+  <div class="card-body p-4">
+    <form method="get" class="row g-3 align-items-end">
+      <div class="col-sm-4 col-md-3">
+        <label class="form-label" for="month">Month</label>
+        <input class="form-control" type="month" id="month" name="month" value="{{ month_value or '' }}">
+      </div>
+      <div class="col-sm-4 col-md-6">
+        <button class="btn btn-primary" type="submit">Show Data</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card shadow-sm border-0 panel-card">
+  <div class="card-body p-4">
+    <div class="table-responsive">
+      <table class="table table-sm align-middle">
+        <thead>
+          <tr>
+            <th>Description</th>
+            <th class="text-end">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Shop cost of sale Bank eft</td><td class="text-end"></td></tr>
+          <tr><td>Shop cost of sale payout from till</td><td class="text-end"></td></tr>
+          <tr><td>Cost of sale fuel</td><td class="text-end"></td></tr>
+          <tr><td>General expenses</td><td class="text-end"></td></tr>
+          <tr><td>Accountant fee</td><td class="text-end"></td></tr>
+          <tr><td>Bank chargers</td><td class="text-end"></td></tr>
+          <tr><td>Insurance&#x20;</td><td class="text-end"></td></tr>
+          <tr><td>Salaries and wages</td><td class="text-end"></td></tr>
+          <tr><td>Staff Fuel</td><td class="text-end"></td></tr>
+          <tr><td>Staff training,uniform &amp; Entertainment</td><td class="text-end"></td></tr>
+          <tr><td>SARS- PAYE UIF</td><td class="text-end"></td></tr>
+          <tr><td>Mibco</td><td class="text-end"></td></tr>
+          <tr><td>RMA Workmans compensation</td><td class="text-end"></td></tr>
+          <tr><td>Rent</td><td class="text-end"></td></tr>
+          <tr><td>Water</td><td class="text-end"></td></tr>
+          <tr><td>Electricity</td><td class="text-end"></td></tr>
+          <tr><td>Telephone MTN &amp; VODACOM</td><td class="text-end"></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
 {% endblock %}
