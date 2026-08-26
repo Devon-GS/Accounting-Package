@@ -1147,6 +1147,32 @@ def stage_ofx_file(
 			payment_date = str(txn["payment_date"])
 			if not description or amount is None:
 				continue
+			duplicate_row = query_one(
+				"""
+				SELECT 1
+				FROM payments
+				WHERE payment_date = ?
+				  AND supplier_name = ?
+				  AND amount_paid = ?
+				UNION
+				SELECT 1
+				FROM staged_payments
+				WHERE payment_date = ?
+				  AND supplier_name = ?
+				  AND amount_paid = ?
+				LIMIT 1
+				""",
+				(
+					payment_date,
+					description,
+					amount,
+					payment_date,
+					description,
+					amount,
+				),
+			)
+			if duplicate_row:
+				continue
 			account = resolve_account_for_supplier(description)
 			account_id = account["id"] if account is not None and "id" in account.keys() else None
 			if account is not None and "account_id" in account.keys():
