@@ -6,35 +6,10 @@ services:
       POSTGRES_DB: accounting
       POSTGRES_USER: accounting
       POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
     ports:
       - "${DB_PORT_BINDING}:5432"   #Used for speedpoint recon access
-    entrypoint: ["/bin/sh", "/usr/local/bin/primary-wrapper.sh"]
     volumes:
       - postgres_primary_data:/var/lib/postgresql/data
-      - ./docker/primary-wrapper.sh:/usr/local/bin/primary-wrapper.sh:ro
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/replication-ready && pg_isready -U accounting -d accounting"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  db-replica:
-    image: postgres:16-alpine
-    container_name: ${DOCKER_NAME}-accounting-db-replica
-    environment:
-      POSTGRES_DB: accounting
-      POSTGRES_USER: accounting
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
-    depends_on:
-      db-primary:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "/usr/local/bin/replica-wrapper.sh"]
-    volumes:
-      - postgres_replica_data:/var/lib/postgresql/data
-      - ./docker/replica-wrapper.sh:/usr/local/bin/replica-wrapper.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U accounting -d accounting"]
       interval: 10s
@@ -50,7 +25,6 @@ services:
       DATABASE_URL: postgresql://accounting:${DB_PASSWORD}@db-primary:5432/accounting
       SECRET_KEY: ${APP_SECRET_KEY}
       PORT: 5000
-      # GUNICORN_CMD_ARGS: "--workers 4 --threads 2"
       APP_NAME: ${APP_NAME}
     depends_on:
       db-primary:
@@ -64,4 +38,3 @@ services:
 volumes:
   app_instance_data:
   postgres_primary_data:
-  postgres_replica_data:

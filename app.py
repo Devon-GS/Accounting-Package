@@ -1229,6 +1229,13 @@ def finalize_resolved_rows(batch_id: int) -> int:
 		JOIN import_files ON import_files.id = staged_payments.file_id
 		WHERE staged_payments.batch_id = ?
 		  AND staged_payments.account_id IS NOT NULL
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM payments
+			WHERE payments.payment_date = staged_payments.payment_date
+			  AND payments.supplier_name = staged_payments.supplier_name
+			  AND payments.amount_paid = staged_payments.amount_paid
+		  )
 		ON CONFLICT (source_file_hash, source_sheet, source_row, source_column) DO NOTHING
 		""",
 		(batch_id,),
