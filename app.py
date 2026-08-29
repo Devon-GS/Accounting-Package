@@ -1766,7 +1766,7 @@ def _resolve_payment_item(staged_id: int, redirect_endpoint: str):
 
 	if staged["account_id"] is not None:
 		flash("That transaction is already resolved.", "info")
-		return redirect(url_for(redirect_endpoint))
+		return redirect(url_for(redirect_endpoint, _anchor="unresolved-transactions"))
 
 	selected_account_id = request.form.get("account_id", type=int)
 	new_account_name = request.form.get("new_account_name", "").strip()
@@ -1793,7 +1793,7 @@ def _resolve_payment_item(staged_id: int, redirect_endpoint: str):
 
 	if not account_id:
 		flash("Choose an existing account or type a new account name before saving.", "warning")
-		return redirect(url_for(redirect_endpoint))
+		return redirect(url_for(redirect_endpoint, _anchor="unresolved-transactions"))
 
 	ensure_rule(staged["supplier_name"], account_id)
 	execute(
@@ -1806,7 +1806,7 @@ def _resolve_payment_item(staged_id: int, redirect_endpoint: str):
 	)
 	finalize_resolved_rows(staged["batch_id"])
 	flash(f"Saved '{staged['supplier_name']}' to '{account_name}'.", "success")
-	return redirect(url_for(redirect_endpoint))
+	return redirect(url_for(redirect_endpoint, _anchor="unresolved-transactions"))
 
 
 @app.route("/cash-payments/resolve/<int:staged_id>", methods=["POST"])
