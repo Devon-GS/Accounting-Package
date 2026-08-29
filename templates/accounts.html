@@ -36,6 +36,14 @@
 
 <div class="card shadow-sm border-0 panel-card">
   <div class="card-body p-4">
+    {% set censored_accounts = [
+      "WAGES DEON",
+      "WAGES DEVON",
+      "WAGES GARY & CHERYL",
+      "WAGES JOHAN",
+      "WAGES OWEN",
+      "WAGES SONJA"
+    ] %}
     <div class="table-responsive">
       <table class="table table-sm align-middle">
         <thead>
@@ -53,7 +61,13 @@
                     {{ row.account_name }}
                   </a>
                 </td>
-                <td class="text-end">R{{ "%.2f"|format(row.amount_paid or 0) }}</td>
+                <td class="text-end">
+                  {% if row.account_name|default('')|trim|upper in censored_accounts %}
+                    ???
+                  {% else %}
+                    R{{ "%.2f"|format(row.amount_paid or 0) }}
+                  {% endif %}
+                </td>
               </tr>
             {% endfor %}
           {% else %}
