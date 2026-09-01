@@ -1367,6 +1367,21 @@ def report_linked_accounts() -> dict[str, list[int]]:
 	return selected
 
 
+def report_linked_account_rows() -> dict[str, list[sqlite3.Row]]:
+	rows = query_all(
+		"""
+		SELECT report_account_links.description_key, accounts.id, accounts.name
+		FROM report_account_links
+		JOIN accounts ON accounts.id = report_account_links.account_id
+		ORDER BY report_account_links.description_key, accounts.name
+		"""
+	)
+	linked: dict[str, list[sqlite3.Row]] = {}
+	for row in rows:
+		linked.setdefault(row["description_key"], []).append(row)
+	return linked
+
+
 def month_label(month_value: str) -> str:
 	return datetime.strptime(month_value, "%Y-%m").strftime("%B %Y")
 
@@ -1541,19 +1556,21 @@ def reports_settings():
 				except ValueError:
 					continue
 				execute(
-					"INSERT INTO report_account_links (description_key, account_id) VALUES (?, ?)",
+					"INSERT INTO report_account_links (description_key, account_id) VALUES (?, ?) ON CONFLICT(description_key, account_id) DO NOTHING",
 					(description_key, account_id_value),
 				)
 		return redirect(url_for("reports_settings"))
 
 	accounts = query_all("SELECT id, name FROM accounts ORDER BY name")
 	selected_account_ids_by_description = report_linked_accounts()
+	linked_accounts_by_description = report_linked_account_rows()
 	return render_template(
 		"reports_settings.html",
 		title="Reports Settings",
 		accounts=accounts,
 		report_descriptions=REPORT_DESCRIPTION_OPTIONS,
 		selected_account_ids_by_description=selected_account_ids_by_description,
+		linked_accounts_by_description=linked_accounts_by_description,
 	)
 
 

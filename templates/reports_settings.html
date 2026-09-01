@@ -34,29 +34,26 @@
             <tr>
               <td>{{ description_label }}</td>
               <td style="min-width: 320px;">
-                <form id="report-links-{{ description_key }}" method="post">
-                  <input type="hidden" name="description_key" value="{{ description_key }}">
-                  <div class="border rounded p-2" style="max-height: 180px; overflow-y: auto;">
-                    {% for account in accounts %}
-                      <div class="form-check">
-                        <input
-                          class="form-check-input"
-                          type="checkbox"
-                          name="account_ids"
-                          value="{{ account.id }}"
-                          id="report-{{ description_key }}-{{ account.id }}"
-                          {% if account.id in selected_account_ids_by_description.get(description_key, []) %}checked{% endif %}
-                        >
-                        <label class="form-check-label report-account-label" for="report-{{ description_key }}-{{ account.id }}">
-                          {{ account.name }}
-                        </label>
-                      </div>
+                <div class="border rounded p-2">
+                  {% set linked_accounts = linked_accounts_by_description.get(description_key, []) %}
+                  {% if linked_accounts %}
+                    {% for account in linked_accounts %}
+                      <div>{{ account.name }}</div>
                     {% endfor %}
-                  </div>
-                </form>
+                  {% else %}
+                    <div class="text-body-secondary">No linked accounts</div>
+                  {% endif %}
+                </div>
               </td>
               <td class="text-end">
-                <button class="btn btn-sm btn-primary" type="submit" form="report-links-{{ description_key }}">Save</button>
+                <button
+                  class="btn btn-sm btn-primary"
+                  type="button"
+                  data-bs-toggle="modal"
+                  data-bs-target="#report-add-modal-{{ description_key }}"
+                >
+                  Add
+                </button>
               </td>
             </tr>
           {% endfor %}
@@ -65,19 +62,67 @@
     </div>
   </div>
 </div>
+{% for description_key, description_label in report_descriptions %}
+  <div class="modal fade" id="report-add-modal-{{ description_key }}" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content">
+        <form method="post">
+          <div class="modal-header">
+            <h5 class="modal-title">Add linked accounts for {{ description_label }}</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" name="description_key" value="{{ description_key }}">
+            <input
+              class="form-control mb-3 report-account-search"
+              type="search"
+              placeholder="Search account"
+              data-report-search
+              data-report-target="#report-account-list-{{ description_key }}"
+            >
+            <div class="border rounded p-2" id="report-account-list-{{ description_key }}" style="max-height: 320px; overflow-y: auto;">
+              {% for account in accounts %}
+                <div class="form-check report-account-item" data-report-account-item data-report-account-name="{{ account.name | lower }}">
+                  <input
+                    class="form-check-input"
+                    type="checkbox"
+                    name="account_ids"
+                    value="{{ account.id }}"
+                    id="report-add-{{ description_key }}-{{ account.id }}"
+                    {% if account.id in selected_account_ids_by_description.get(description_key, []) %}checked{% endif %}
+                  >
+                  <label class="form-check-label report-account-label" for="report-add-{{ description_key }}-{{ account.id }}">
+                    {{ account.name }}
+                  </label>
+                </div>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-primary">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+{% endfor %}
 <script>
-  document.querySelectorAll('.report-account-label').forEach((label) => {
-    const checkbox = document.getElementById(label.getAttribute('for'));
-    if (!checkbox) {
+  document.querySelectorAll('[data-report-search]').forEach((searchInput) => {
+    const targetSelector = searchInput.getAttribute('data-report-target');
+    const target = document.querySelector(targetSelector);
+    if (!target) {
       return;
     }
 
-    const syncLabelState = () => {
-      label.classList.toggle('text-secondary', !checkbox.checked);
-    };
-
-    checkbox.addEventListener('change', syncLabelState);
-    syncLabelState();
+    const items = Array.from(target.querySelectorAll('[data-report-account-item]'));
+    searchInput.addEventListener('input', () => {
+      const query = searchInput.value.trim().toLowerCase();
+      items.forEach((item) => {
+        const name = item.getAttribute('data-report-account-name') || '';
+        item.style.display = name.includes(query) ? '' : 'none';
+      });
+    });
   });
 </script>
 {% endblock %}
