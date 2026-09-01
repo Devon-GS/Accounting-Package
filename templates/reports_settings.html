@@ -31,29 +31,51 @@
         </thead>
         <tbody>
           {% for description_key, description_label in report_descriptions %}
-            <tr>
+            <tr id="report-row-{{ description_key }}">
               <td>{{ description_label }}</td>
               <td style="min-width: 320px;">
                 <div class="border rounded p-2">
-                  {% set linked_accounts = linked_accounts_by_description.get(description_key, []) %}
-                  {% if linked_accounts %}
-                    {% for account in linked_accounts %}
-                      <div>{{ account.name }}</div>
-                    {% endfor %}
+                  {% if description_key in report_linked_description_keys %}
+                    {% set linked_accounts = linked_accounts_by_description.get(description_key, []) %}
+                    {% if linked_accounts %}
+                      {% for account in linked_accounts %}
+                        <div>{{ account.name }}</div>
+                      {% endfor %}
+                    {% else %}
+                      <div class="text-body-secondary">No linked accounts</div>
+                    {% endif %}
                   {% else %}
-                    <div class="text-body-secondary">No linked accounts</div>
+                    <button
+                      class="btn btn-sm btn-primary"
+                      type="button"
+                      data-bs-toggle="modal"
+                      data-bs-target="#report-edit-modal-{{ description_key }}"
+                    >
+                      Edit
+                    </button>
                   {% endif %}
                 </div>
               </td>
               <td class="text-end">
-                <button
-                  class="btn btn-sm btn-primary"
-                  type="button"
-                  data-bs-toggle="modal"
-                  data-bs-target="#report-add-modal-{{ description_key }}"
-                >
-                  Add
-                </button>
+                {% if description_key in report_linked_description_keys %}
+                  <button
+                    class="btn btn-sm btn-primary"
+                    type="button"
+                    data-bs-toggle="modal"
+                    data-bs-target="#report-add-modal-{{ description_key }}"
+                  >
+                    Add
+                  </button>
+                {% else %}
+                  <button
+                    class="btn btn-sm btn-primary"
+                    type="button"
+                    data-bs-toggle="modal"
+                    data-bs-target="#report-add-modal-{{ description_key }}"
+                  >
+                    Add
+                  </button>
+                {% endif %}
               </td>
             </tr>
           {% endfor %}
@@ -62,41 +84,60 @@
     </div>
   </div>
 </div>
+
 {% for description_key, description_label in report_descriptions %}
   <div class="modal fade" id="report-add-modal-{{ description_key }}" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
       <div class="modal-content">
         <form method="post">
+          <input type="hidden" name="action" value="{% if description_key in report_linked_description_keys %}add_links{% else %}create_fixed{% endif %}">
           <div class="modal-header">
-            <h5 class="modal-title">Add linked accounts for {{ description_label }}</h5>
+            {% if description_key in report_linked_description_keys %}
+              <h5 class="modal-title">Add linked accounts for {{ description_label }}</h5>
+            {% else %}
+              <h5 class="modal-title">Add amount for {{ description_label }}</h5>
+            {% endif %}
             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
           </div>
           <div class="modal-body">
             <input type="hidden" name="description_key" value="{{ description_key }}">
-            <input
-              class="form-control mb-3 report-account-search"
-              type="search"
-              placeholder="Search account"
-              data-report-search
-              data-report-target="#report-account-list-{{ description_key }}"
-            >
-            <div class="border rounded p-2" id="report-account-list-{{ description_key }}" style="max-height: 320px; overflow-y: auto;">
-              {% for account in accounts %}
-                <div class="form-check report-account-item" data-report-account-item data-report-account-name="{{ account.name | lower }}">
-                  <input
-                    class="form-check-input"
-                    type="checkbox"
-                    name="account_ids"
-                    value="{{ account.id }}"
-                    id="report-add-{{ description_key }}-{{ account.id }}"
-                    {% if account.id in selected_account_ids_by_description.get(description_key, []) %}checked{% endif %}
-                  >
-                  <label class="form-check-label report-account-label" for="report-add-{{ description_key }}-{{ account.id }}">
-                    {{ account.name }}
-                  </label>
+            {% if description_key in report_linked_description_keys %}
+              <input
+                class="form-control mb-3 report-account-search"
+                type="search"
+                placeholder="Search account"
+                data-report-search
+                data-report-target="#report-account-list-{{ description_key }}"
+              >
+              <div class="border rounded p-2" id="report-account-list-{{ description_key }}" style="max-height: 320px; overflow-y: auto;">
+                {% for account in accounts %}
+                  <div class="form-check report-account-item" data-report-account-item data-report-account-name="{{ account.name | lower }}">
+                    <input
+                      class="form-check-input"
+                      type="checkbox"
+                      name="account_ids"
+                      value="{{ account.id }}"
+                      id="report-add-{{ description_key }}-{{ account.id }}"
+                      {% if account.id in selected_account_ids_by_description.get(description_key, []) %}checked{% endif %}
+                    >
+                    <label class="form-check-label report-account-label" for="report-add-{{ description_key }}-{{ account.id }}">
+                      {{ account.name }}
+                    </label>
+                  </div>
+                {% endfor %}
+              </div>
+            {% else %}
+              <div class="row g-3">
+                <div class="col-md-6">
+                  <label class="form-label" for="entry-date-{{ description_key }}">Date</label>
+                  <input class="form-control" type="date" id="entry-date-{{ description_key }}" name="entry_date">
                 </div>
-              {% endfor %}
-            </div>
+                <div class="col-md-6">
+                  <label class="form-label" for="amount-{{ description_key }}">Amount</label>
+                  <input class="form-control" type="number" id="amount-{{ description_key }}" name="amount" step="0.01" min="0">
+                </div>
+              </div>
+            {% endif %}
           </div>
           <div class="modal-footer">
             <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -107,6 +148,55 @@
     </div>
   </div>
 {% endfor %}
+
+{% for description_key, description_label in report_descriptions if description_key in report_fixed_description_keys %}
+  <div class="modal fade" id="report-edit-modal-{{ description_key }}" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Edit {{ description_label }}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          {% set description_entries = fixed_amount_rows | selectattr('description_key', 'equalto', description_key) | list %}
+          {% if description_entries %}
+            {% for item in description_entries %}
+              <div class="border rounded p-3 mb-3">
+                <div class="d-flex flex-wrap align-items-end gap-3 justify-content-between">
+                  <form method="post" class="row g-3 align-items-end flex-grow-1">
+                    <input type="hidden" name="action" value="update_fixed">
+                    <input type="hidden" name="description_key" value="{{ item.description_key }}">
+                    <input type="hidden" name="entry_id" value="{{ item.id }}">
+                    <div class="col-md-5">
+                      <label class="form-label" for="edit-date-{{ item.id }}">Date</label>
+                      <input class="form-control" type="date" id="edit-date-{{ item.id }}" name="entry_date" value="{{ item.entry_date }}">
+                    </div>
+                    <div class="col-md-4">
+                      <label class="form-label" for="edit-amount-{{ item.id }}">Amount</label>
+                      <input class="form-control" type="number" id="edit-amount-{{ item.id }}" name="amount" step="0.01" min="0" value="{{ item.amount }}">
+                    </div>
+                    <div class="col-md-3">
+                      <button class="btn btn-primary" type="submit">Save</button>
+                    </div>
+                  </form>
+                  <form method="post">
+                    <input type="hidden" name="action" value="delete_fixed">
+                    <input type="hidden" name="description_key" value="{{ item.description_key }}">
+                    <input type="hidden" name="entry_id" value="{{ item.id }}">
+                    <button class="btn btn-outline-danger" type="submit">Delete</button>
+                  </form>
+                </div>
+              </div>
+            {% endfor %}
+          {% else %}
+            <div class="text-body-secondary">No entries added</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+{% endfor %}
+
 <script>
   document.querySelectorAll('[data-report-search]').forEach((searchInput) => {
     const targetSelector = searchInput.getAttribute('data-report-target');
