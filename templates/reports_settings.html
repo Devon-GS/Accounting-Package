@@ -198,6 +198,25 @@
 {% endfor %}
 
 <script>
+  const scrollStorageKey = 'reports-settings-scroll-y';
+  if ('scrollRestoration' in history) {
+    history.scrollRestoration = 'manual';
+  }
+
+  const savedScrollY = sessionStorage.getItem(scrollStorageKey);
+  if (savedScrollY !== null) {
+    window.addEventListener('load', () => {
+      window.scrollTo(0, Number(savedScrollY) || 0);
+      sessionStorage.removeItem(scrollStorageKey);
+    });
+  }
+
+  document.querySelectorAll('form[method="post"]').forEach((form) => {
+    form.addEventListener('submit', () => {
+      sessionStorage.setItem(scrollStorageKey, String(window.scrollY || window.pageYOffset || 0));
+    });
+  });
+
   document.querySelectorAll('[data-report-search]').forEach((searchInput) => {
     const targetSelector = searchInput.getAttribute('data-report-target');
     const target = document.querySelector(targetSelector);
