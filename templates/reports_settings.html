@@ -110,21 +110,26 @@
                 data-report-target="#report-account-list-{{ description_key }}"
               >
               <div class="border rounded p-2" id="report-account-list-{{ description_key }}" style="max-height: 320px; overflow-y: auto;">
-                {% for account in accounts %}
-                  <div class="form-check report-account-item" data-report-account-item data-report-account-name="{{ account.name | lower }}">
-                    <input
-                      class="form-check-input"
-                      type="checkbox"
-                      name="account_ids"
-                      value="{{ account.id }}"
-                      id="report-add-{{ description_key }}-{{ account.id }}"
-                      {% if account.id in selected_account_ids_by_description.get(description_key, []) %}checked{% endif %}
-                    >
-                    <label class="form-check-label report-account-label" for="report-add-{{ description_key }}-{{ account.id }}">
-                      {{ account.name }}
-                    </label>
-                  </div>
-                {% endfor %}
+                {% set available_accounts = available_accounts_by_description.get(description_key, []) %}
+                {% if available_accounts %}
+                  {% for account in available_accounts %}
+                    <div class="form-check report-account-item" data-report-account-item data-report-account-name="{{ account.name | lower }}">
+                      <input
+                        class="form-check-input"
+                        type="checkbox"
+                        name="account_ids"
+                        value="{{ account.id }}"
+                        id="report-add-{{ description_key }}-{{ account.id }}"
+                        {% if account.id in selected_account_ids_by_description.get(description_key, []) %}checked{% endif %}
+                      >
+                      <label class="form-check-label report-account-label" for="report-add-{{ description_key }}-{{ account.id }}">
+                        {{ account.name }}
+                      </label>
+                    </div>
+                  {% endfor %}
+                {% else %}
+                  <div class="text-body-secondary">No accounts available</div>
+                {% endif %}
               </div>
             {% else %}
               <div class="row g-3">

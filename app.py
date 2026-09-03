@@ -1422,6 +1422,27 @@ def report_linked_account_rows() -> dict[str, list[sqlite3.Row]]:
 	return linked
 
 
+def report_available_accounts_by_description(
+	accounts: list[sqlite3.Row],
+	selected_account_ids_by_description: dict[str, list[int]],
+) -> dict[str, list[sqlite3.Row]]:
+	available: dict[str, list[sqlite3.Row]] = {}
+	all_linked_account_ids = {
+		account_id
+		for account_ids in selected_account_ids_by_description.values()
+		for account_id in account_ids
+	}
+	for description_key, _description_label in REPORT_LINKED_DESCRIPTION_OPTIONS:
+		selected_ids = set(selected_account_ids_by_description.get(description_key, []))
+		other_linked_ids = all_linked_account_ids - selected_ids
+		available[description_key] = [
+			account
+			for account in accounts
+			if account["id"] not in other_linked_ids
+		]
+	return available
+
+
 def report_fixed_amounts_for_month(month_value: str | None) -> dict[str, float]:
 	if not month_value:
 		return {}
@@ -1630,11 +1651,25 @@ def reports_settings():
 					(entry_date, amount, entry_id),
 				)
 		elif description_key in REPORT_LINKED_DESCRIPTION_KEYS:
+			current_selected_ids = set(report_linked_accounts().get(description_key, []))
+			all_selected_ids = {
+				account_id
+				for account_ids in report_linked_accounts().values()
+				for account_id in account_ids
+			}
+			other_linked_ids = all_selected_ids - current_selected_ids
+			allowed_account_ids = {
+				row["id"]
+				for row in query_all("SELECT id FROM accounts")
+				if row["id"] not in other_linked_ids
+			}
 			execute("DELETE FROM report_account_links WHERE description_key = ?", (description_key,))
 			for account_id in request.form.getlist("account_ids"):
 				try:
 					account_id_value = int(account_id)
 				except ValueError:
+					continue
+				if account_id_value not in allowed_account_ids:
 					continue
 				execute(
 					"INSERT INTO report_account_links (description_key, account_id) VALUES (?, ?) ON CONFLICT(description_key, account_id) DO NOTHING",
@@ -1653,6 +1688,7 @@ def reports_settings():
 	accounts = query_all("SELECT id, name FROM accounts ORDER BY name")
 	selected_account_ids_by_description = report_linked_accounts()
 	linked_accounts_by_description = report_linked_account_rows()
+	available_accounts_by_description = report_available_accounts_by_description(accounts, selected_account_ids_by_description)
 	fixed_amount_rows = report_fixed_amount_rows()
 	return render_template(
 		"reports_settings.html",
@@ -1661,6 +1697,7 @@ def reports_settings():
 		report_descriptions=REPORT_DESCRIPTION_OPTIONS,
 		selected_account_ids_by_description=selected_account_ids_by_description,
 		linked_accounts_by_description=linked_accounts_by_description,
+		available_accounts_by_description=available_accounts_by_description,
 		fixed_amount_rows=fixed_amount_rows,
 		report_linked_description_keys=REPORT_LINKED_DESCRIPTION_KEYS,
 		report_fixed_description_keys=REPORT_FIXED_DESCRIPTION_KEYS,
